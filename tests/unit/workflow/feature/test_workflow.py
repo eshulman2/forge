@@ -2,6 +2,7 @@
 
 
 from forge.models.workflow import TicketType
+from forge.workflow.feature.graph import route_by_ticket_type
 
 
 class TestFeatureWorkflow:
@@ -75,3 +76,23 @@ class TestFeatureWorkflow:
         assert state["ticket_key"] == "TEST-123"
         assert state["ticket_type"] == TicketType.FEATURE
         assert state["prd_content"] == ""
+
+    def test_resume_regenerate_all_epics_stays_on_regeneration_node(self):
+        """Retrying full plan regeneration should not restart raw epic decomposition."""
+        state = {
+            "ticket_key": "TEST-123",
+            "ticket_type": TicketType.FEATURE,
+            "current_node": "regenerate_all_epics",
+        }
+
+        assert route_by_ticket_type(state) == "regenerate_all_epics"
+
+    def test_resume_update_single_epic_stays_on_update_node(self):
+        """Retrying an Epic-level plan update should not create new epics."""
+        state = {
+            "ticket_key": "TEST-123",
+            "ticket_type": TicketType.FEATURE,
+            "current_node": "update_single_epic",
+        }
+
+        assert route_by_ticket_type(state) == "update_single_epic"

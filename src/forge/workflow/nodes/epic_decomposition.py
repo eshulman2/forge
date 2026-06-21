@@ -204,6 +204,9 @@ async def decompose_epics(state: WorkflowState) -> WorkflowState:
                     **state,
                     "epic_keys": epic_keys,
                     "generation_context": generation_context,
+                    "feedback_comment": None,
+                    "revision_requested": False,
+                    "current_epic_key": None,
                     "current_node": "plan_approval_gate",
                     "last_error": f"Partial Jira failure: {jira_error}" if jira_error else None,
                 }

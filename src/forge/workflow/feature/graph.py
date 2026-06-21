@@ -95,8 +95,12 @@ def route_by_ticket_type(state: FeatureState) -> str:
             return "generate_spec"
         elif current_node == "spec_approval_gate":
             return "spec_approval_gate"
-        elif current_node in ("decompose_epics", "regenerate_all_epics", "update_single_epic"):
+        elif current_node == "decompose_epics":
             return "decompose_epics"
+        elif current_node == "regenerate_all_epics":
+            return "regenerate_all_epics"
+        elif current_node == "update_single_epic":
+            return "update_single_epic"
         elif current_node == "plan_approval_gate":
             return "plan_approval_gate"
         elif current_node == "generate_tasks":
@@ -408,6 +412,8 @@ def build_feature_graph() -> StateGraph:
             "generate_spec": "generate_spec",
             "spec_approval_gate": "spec_approval_gate",
             "decompose_epics": "decompose_epics",
+            "regenerate_all_epics": "regenerate_all_epics",
+            "update_single_epic": "update_single_epic",
             "plan_approval_gate": "plan_approval_gate",
             "generate_tasks": "generate_tasks",
             "task_approval_gate": "task_approval_gate",
