@@ -129,7 +129,14 @@ class TestOptionNDetection:
         message = _make_option_message("!I think the analysis missed the real root cause.")
         state = _make_rca_gate_state()
 
-        result = await worker._handle_resume_event(message, state)
+        mock_jira = AsyncMock()
+        mock_jira.close = AsyncMock()
+
+        with (
+            patch("forge.orchestrator.worker.JiraClient", return_value=mock_jira),
+            patch("forge.orchestrator.worker.post_status_comment", new_callable=AsyncMock),
+        ):
+            result = await worker._handle_resume_event(message, state)
 
         assert result["revision_requested"] is True
         assert result["selected_fix_option"] is None

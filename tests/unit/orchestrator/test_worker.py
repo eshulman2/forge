@@ -13,6 +13,17 @@ from forge.queue.models import QueueMessage
 class TestQuestionDetection:
     """Tests for Q&A mode question detection."""
 
+    @pytest.fixture(autouse=True)
+    def ack_comment_mocks(self):
+        """Mock Jira acknowledgement posting for direct resume-event tests."""
+        mock_jira = AsyncMock()
+        mock_jira.close = AsyncMock()
+        with (
+            patch("forge.orchestrator.worker.JiraClient", return_value=mock_jira),
+            patch("forge.orchestrator.worker.post_status_comment", new_callable=AsyncMock) as post,
+        ):
+            yield post
+
     @pytest.fixture
     def worker(self) -> OrchestratorWorker:
         """Create a worker instance for testing."""
@@ -68,7 +79,11 @@ class TestQuestionDetection:
 
     @pytest.mark.asyncio
     async def test_question_comment_sets_is_question_flag(
-        self, worker: OrchestratorWorker, base_message: QueueMessage, base_state: dict
+        self,
+        worker: OrchestratorWorker,
+        base_message: QueueMessage,
+        base_state: dict,
+        ack_comment_mocks,
     ):
         """Comments starting with ? set is_question flag."""
         message = self._make_message_with_comment(base_message, "?Why REST instead of GraphQL?")
@@ -79,6 +94,10 @@ class TestQuestionDetection:
         assert result["feedback_comment"] == "?Why REST instead of GraphQL?"
         assert result["revision_requested"] is False
         assert result["is_paused"] is False
+        ack_comment_mocks.assert_awaited_once()
+        ack_text = ack_comment_mocks.await_args.args[2]
+        assert "received your question" in ack_text
+        assert "the PRD" in ack_text
 
     @pytest.mark.asyncio
     async def test_forge_ask_comment_sets_is_question_flag(
@@ -98,7 +117,11 @@ class TestQuestionDetection:
 
     @pytest.mark.asyncio
     async def test_normal_feedback_still_works(
-        self, worker: OrchestratorWorker, base_message: QueueMessage, base_state: dict
+        self,
+        worker: OrchestratorWorker,
+        base_message: QueueMessage,
+        base_state: dict,
+        ack_comment_mocks,
     ):
         """Feedback comments with ! prefix trigger revision_requested."""
         message = self._make_message_with_comment(
@@ -111,6 +134,10 @@ class TestQuestionDetection:
         assert result["revision_requested"] is True
         assert result["feedback_comment"] == "Please add more detail to the security section"
         assert result["is_paused"] is False
+        ack_comment_mocks.assert_awaited_once()
+        ack_text = ack_comment_mocks.await_args.args[2]
+        assert "received your revision request" in ack_text
+        assert "regenerating" in ack_text
 
     @pytest.mark.asyncio
     async def test_task_phase_feedback_from_epic_sets_current_epic_key(
@@ -118,6 +145,7 @@ class TestQuestionDetection:
         worker: OrchestratorWorker,
         base_message: QueueMessage,
         base_state: dict,
+        ack_comment_mocks,
     ):
         """Comments on an Epic during task review preserve the Epic source."""
         state = {
@@ -147,6 +175,9 @@ class TestQuestionDetection:
         assert result["feedback_comment"] == "Please revise the tasks for this epic"
         assert result["current_epic_key"] == "TEST-124"
         assert result["current_task_key"] is None
+        ack_comment_mocks.assert_awaited_once()
+        ack_text = ack_comment_mocks.await_args.args[2]
+        assert "from TEST-124" in ack_text
 
     @pytest.mark.asyncio
     async def test_prd_label_change_to_approved_sets_approved_flag(
