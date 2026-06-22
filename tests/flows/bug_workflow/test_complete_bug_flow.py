@@ -136,7 +136,7 @@ class TestBugWorkflowResumeRouting:
 
     @pytest.mark.parametrize("node,expected", [
         ("analyze_bug", "analyze_bug"),
-        ("regenerate_rca", "analyze_bug"),
+        ("regenerate_rca", "regenerate_rca"),  # reruns cleanup+setup before analyze_bug
         ("rca_approval_gate", "rca_option_gate"),  # backward compat: old gate maps to new
         ("setup_workspace", "setup_workspace"),
         ("implement_bug_fix", "implement_bug_fix"),
