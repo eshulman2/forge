@@ -86,6 +86,16 @@ class TestRouteTaskApproval:
 
         assert result == "update_single_task"
 
+    def test_routes_to_regenerate_all_on_epic_sourced_rejection(self, task_pending_state):
+        """Epic-sourced task feedback uses full task regeneration."""
+        task_pending_state["current_epic_key"] = "TEST-124"
+        task_pending_state["feedback_comment"] = "Revise the tasks for this epic."
+        task_pending_state["revision_requested"] = True
+
+        result = route_task_approval(task_pending_state)
+
+        assert result == "regenerate_all_tasks"
+
     def test_routes_to_end_when_pending(self, task_pending_state):
         """Pending Tasks without feedback routes to END."""
         result = route_task_approval(task_pending_state)

@@ -217,6 +217,10 @@ async def generate_tasks(state: WorkflowState) -> WorkflowState:
                     **state,
                     "task_keys": all_task_keys,
                     "tasks_by_repo": tasks_by_repo,
+                    "feedback_comment": None,
+                    "revision_requested": False,
+                    "current_task_key": None,
+                    "current_epic_key": None,
                     "current_node": "task_approval_gate",
                     "last_error": f"Partial Jira failure: {jira_error}" if jira_error else None,
                 }

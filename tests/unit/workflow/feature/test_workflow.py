@@ -96,3 +96,43 @@ class TestFeatureWorkflow:
         }
 
         assert route_by_ticket_type(state) == "update_single_epic"
+
+    def test_resume_regenerate_prd_stays_on_regeneration_node(self):
+        """Retrying PRD revision should not restart initial PRD generation."""
+        state = {
+            "ticket_key": "TEST-123",
+            "ticket_type": TicketType.FEATURE,
+            "current_node": "regenerate_prd",
+        }
+
+        assert route_by_ticket_type(state) == "regenerate_prd"
+
+    def test_resume_regenerate_spec_stays_on_regeneration_node(self):
+        """Retrying spec revision should not restart initial spec generation."""
+        state = {
+            "ticket_key": "TEST-123",
+            "ticket_type": TicketType.FEATURE,
+            "current_node": "regenerate_spec",
+        }
+
+        assert route_by_ticket_type(state) == "regenerate_spec"
+
+    def test_resume_regenerate_all_tasks_stays_on_regeneration_node(self):
+        """Retrying full task regeneration should not restart the workflow."""
+        state = {
+            "ticket_key": "TEST-123",
+            "ticket_type": TicketType.FEATURE,
+            "current_node": "regenerate_all_tasks",
+        }
+
+        assert route_by_ticket_type(state) == "regenerate_all_tasks"
+
+    def test_resume_update_single_task_stays_on_update_node(self):
+        """Retrying a Task-level update should not restart the workflow."""
+        state = {
+            "ticket_key": "TEST-123",
+            "ticket_type": TicketType.FEATURE,
+            "current_node": "update_single_task",
+        }
+
+        assert route_by_ticket_type(state) == "update_single_task"

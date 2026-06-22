@@ -113,6 +113,42 @@ class TestQuestionDetection:
         assert result["is_paused"] is False
 
     @pytest.mark.asyncio
+    async def test_task_phase_feedback_from_epic_sets_current_epic_key(
+        self,
+        worker: OrchestratorWorker,
+        base_message: QueueMessage,
+        base_state: dict,
+    ):
+        """Comments on an Epic during task review preserve the Epic source."""
+        state = {
+            **base_state,
+            "current_node": "task_approval_gate",
+            "epic_keys": ["TEST-124"],
+            "task_keys": ["TEST-130"],
+        }
+        payload = {
+            **base_message.payload,
+            "source_ticket_key": "TEST-124",
+            "comment": {"body": "!Please revise the tasks for this epic"},
+            "changelog": {"items": []},
+        }
+        message = QueueMessage(
+            message_id=base_message.message_id,
+            event_id=base_message.event_id,
+            source=base_message.source,
+            event_type="comment_created",
+            ticket_key=base_message.ticket_key,
+            payload=payload,
+        )
+
+        result = await worker._handle_resume_event(message, state)
+
+        assert result["revision_requested"] is True
+        assert result["feedback_comment"] == "Please revise the tasks for this epic"
+        assert result["current_epic_key"] == "TEST-124"
+        assert result["current_task_key"] is None
+
+    @pytest.mark.asyncio
     async def test_prd_label_change_to_approved_sets_approved_flag(
         self, worker: OrchestratorWorker, base_message: QueueMessage, base_state: dict
     ):

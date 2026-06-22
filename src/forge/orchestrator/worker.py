@@ -722,12 +722,19 @@ class OrchestratorWorker:
                                     f"(not in epic_keys): {feedback[:100]}..."
                                 )
                         elif current_node in task_phase_nodes:
-                            # In task phase - check if it's a Task
+                            # In task phase - comments may target a Task or its Epic.
                             if child_ticket_key in task_keys:
                                 comment_ticket_key = child_ticket_key
                                 comment_ticket_type = "task"
                                 logger.info(
                                     f"Detected Task-level comment on {comment_ticket_key}: "
+                                    f"{feedback[:100]}..."
+                                )
+                            elif child_ticket_key in epic_keys:
+                                comment_ticket_key = child_ticket_key
+                                comment_ticket_type = "epic"
+                                logger.info(
+                                    f"Detected Epic-level task comment on {comment_ticket_key}: "
                                     f"{feedback[:100]}..."
                                 )
                             else:

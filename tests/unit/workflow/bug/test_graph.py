@@ -50,8 +50,8 @@ class TestRouteEntry:
         ("post_merge_summary", "post_merge_summary"),
         # Backward compat: old rca_approval_gate value maps to rca_option_gate
         ("rca_approval_gate", "rca_option_gate"),
-        # regenerate_rca loops through analyze_bug
-        ("regenerate_rca", "analyze_bug"),
+        # regenerate_rca performs cleanup before routing through analyze_bug
+        ("regenerate_rca", "regenerate_rca"),
         # Preserved existing nodes
         ("setup_workspace", "setup_workspace"),
         ("implement_bug_fix", "implement_bug_fix"),
