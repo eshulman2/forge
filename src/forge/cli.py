@@ -523,6 +523,23 @@ async def cmd_project_setup(args: argparse.Namespace) -> int:
             await jira.set_project_property(project_key, "forge.default_repo", args.default_repo)
             print(f"[OK] forge.default_repo = {args.default_repo!r}")
 
+        # forge.prd_proposals_repo — opt-in / opt-out for PRD approval via GitHub PR
+        if args.prd_proposals_repo is not None:
+            if args.prd_proposals_repo == "":
+                await jira.delete_project_property(project_key, "forge.prd_proposals_repo")
+                print("[OK] forge.prd_proposals_repo removed (PRD approval via Jira labels)")
+            else:
+                if "/" not in args.prd_proposals_repo:
+                    print(
+                        f"Error: --prd-proposals-repo must be owner/repo, got: {args.prd_proposals_repo!r}",
+                        file=sys.stderr,
+                    )
+                    return 1
+                await jira.set_project_property(
+                    project_key, "forge.prd_proposals_repo", args.prd_proposals_repo
+                )
+                print(f"[OK] forge.prd_proposals_repo = {args.prd_proposals_repo!r}")
+
         # forge.skills — built from --add-skill flags and/or --skills-config JSON
         skill_entries: list[dict] = []
 
@@ -872,6 +889,15 @@ Examples:
         "--default-repo",
         metavar="OWNER/REPO",
         help="Primary GitHub repo (sets forge.default_repo)",
+    )
+    setup_parser.add_argument(
+        "--prd-proposals-repo",
+        metavar="OWNER/REPO",
+        default=None,
+        help=(
+            "Enhancement proposals repo for PR-based PRD approval "
+            "(sets forge.prd_proposals_repo). Pass empty string to disable."
+        ),
     )
     setup_parser.add_argument(
         "--add-skill",

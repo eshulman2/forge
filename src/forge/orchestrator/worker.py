@@ -30,6 +30,7 @@ from forge.skills.utils import extract_project_key
 from forge.workflow.registry import create_default_router
 from forge.workflow.router import WorkflowRouter
 from forge.workflow.utils.comment_classifier import CommentType, classify_comment
+from forge.workflow.utils.jira_status import post_status_comment
 
 logger = logging.getLogger(__name__)
 
@@ -702,6 +703,7 @@ class OrchestratorWorker:
                         "task_approval_gate",
                         "generate_tasks",
                         "regenerate_all_tasks",
+                        "regenerate_epic_tasks",
                         "update_single_task",
                     )
 
@@ -722,12 +724,19 @@ class OrchestratorWorker:
                                     f"(not in epic_keys): {feedback[:100]}..."
                                 )
                         elif current_node in task_phase_nodes:
-                            # In task phase - check if it's a Task
+                            # In task phase - comments may target a Task or its Epic.
                             if child_ticket_key in task_keys:
                                 comment_ticket_key = child_ticket_key
                                 comment_ticket_type = "task"
                                 logger.info(
                                     f"Detected Task-level comment on {comment_ticket_key}: "
+                                    f"{feedback[:100]}..."
+                                )
+                            elif child_ticket_key in epic_keys:
+                                comment_ticket_key = child_ticket_key
+                                comment_ticket_type = "epic"
+                                logger.info(
+                                    f"Detected Epic-level task comment on {comment_ticket_key}: "
                                     f"{feedback[:100]}..."
                                 )
                             else:
@@ -998,6 +1007,12 @@ class OrchestratorWorker:
             updated_state["is_question"] = True
             updated_state["feedback_comment"] = feedback
             updated_state["revision_requested"] = False
+            await self._post_resume_ack_comment(
+                message.ticket_key,
+                signal_type="question",
+                current_node=current_node,
+                source_ticket_key=comment_ticket_key,
+            )
         elif is_rejected and feedback:
             updated_state["is_paused"] = False
             updated_state["revision_requested"] = True
@@ -1011,6 +1026,12 @@ class OrchestratorWorker:
             else:
                 updated_state["current_task_key"] = None
                 updated_state["current_epic_key"] = None
+            await self._post_resume_ack_comment(
+                message.ticket_key,
+                signal_type="revision",
+                current_node=current_node,
+                source_ticket_key=comment_ticket_key,
+            )
         elif was_errored:
             # Workflow has an error — auto-resume up to MAX_AUTO_RETRIES times,
             # then require an explicit forge:retry label.
@@ -1069,6 +1090,66 @@ class OrchestratorWorker:
                 return current_state
 
         return updated_state
+
+    async def _post_resume_ack_comment(
+        self,
+        ticket_key: str,
+        signal_type: str,
+        current_node: str,
+        source_ticket_key: str | None = None,
+    ) -> None:
+        """Post a best-effort Jira acknowledgement for user-visible resume signals."""
+        stage = self._stage_label_for_node(current_node)
+        source_suffix = (
+            f" from {source_ticket_key}"
+            if source_ticket_key and source_ticket_key != ticket_key
+            else ""
+        )
+
+        if signal_type == "question":
+            message = (
+                f"Forge received your question about {stage}{source_suffix} "
+                "and is preparing an answer."
+            )
+        else:
+            message = (
+                f"Forge received your revision request for {stage}{source_suffix} "
+                "and is regenerating the artifact."
+            )
+
+        try:
+            jira = JiraClient()
+            try:
+                await post_status_comment(jira, ticket_key, message)
+            finally:
+                await jira.close()
+        except Exception as e:
+            logger.warning(f"Failed to post resume acknowledgement to {ticket_key}: {e}")
+
+    @staticmethod
+    def _stage_label_for_node(current_node: str) -> str:
+        """Return a human-readable workflow stage for an approval/review node."""
+        node_to_stage = {
+            "prd_approval_gate": "the PRD",
+            "generate_prd": "the PRD",
+            "regenerate_prd": "the PRD",
+            "spec_approval_gate": "the spec",
+            "generate_spec": "the spec",
+            "regenerate_spec": "the spec",
+            "plan_approval_gate": "the plan",
+            "decompose_epics": "the plan",
+            "regenerate_all_epics": "the plan",
+            "update_single_epic": "the plan",
+            "rca_option_gate": "the RCA",
+            "plan_approval_gate_bug": "the plan",
+            "task_approval_gate": "the tasks",
+            "generate_tasks": "the tasks",
+            "regenerate_all_tasks": "the tasks",
+            "regenerate_epic_tasks": "the tasks",
+            "update_single_task": "the task",
+            "human_review_gate": "the implementation review",
+        }
+        return node_to_stage.get(current_node, "the current workflow stage")
 
     @staticmethod
     def _extract_text_from_adf(adf: dict) -> str:

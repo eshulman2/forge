@@ -144,7 +144,8 @@ Opt-in per project via Jira project property. When configured, Forge opens a PR 
 |----------|---------|-------------|
 | `forge.prd_proposals_repo` | `org/enhancement-proposals` | Enables PR-based PRD approval for this project |
 
-Set via: `jira project-property set <PROJECT> forge.prd_proposals_repo "owner/repo"`
+Set via: `forge project-setup <PROJECT> --prd-proposals-repo owner/repo`
+Remove via: `forge project-setup <PROJECT> --prd-proposals-repo ""`
 
 **Global fallbacks (`.env`, used when `FORGE_REQUIRE_PROJECT_CONFIG=false`):**
 

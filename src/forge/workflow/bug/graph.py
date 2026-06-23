@@ -95,8 +95,10 @@ def route_entry(state: BugState) -> str:
             return "triage_check"
         elif current_node == "triage_gate":
             return "triage_gate"
-        elif current_node in ("analyze_bug", "regenerate_rca"):
+        elif current_node == "analyze_bug":
             return "analyze_bug"
+        elif current_node == "regenerate_rca":
+            return "regenerate_rca"
         elif current_node == "reflect_rca":
             return "reflect_rca"
         elif current_node in ("rca_option_gate", "rca_approval_gate"):

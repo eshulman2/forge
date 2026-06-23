@@ -122,6 +122,7 @@ async def decompose_epics(state: WorkflowState) -> WorkflowState:
             "project_key": project_key,
             "feature_summary": parent_issue.summary,
             "available_repos": available_repos,
+            "feedback": state.get("feedback_comment", ""),
         }
 
         # Generate Epic breakdown using Claude - primary operation
@@ -204,6 +205,9 @@ async def decompose_epics(state: WorkflowState) -> WorkflowState:
                     **state,
                     "epic_keys": epic_keys,
                     "generation_context": generation_context,
+                    "feedback_comment": None,
+                    "revision_requested": False,
+                    "current_epic_key": None,
                     "current_node": "plan_approval_gate",
                     "last_error": f"Partial Jira failure: {jira_error}" if jira_error else None,
                 }
