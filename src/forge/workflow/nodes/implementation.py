@@ -16,6 +16,7 @@ from pathlib import Path
 
 from forge.config import get_settings
 from forge.integrations.jira.client import JiraClient
+from forge.models.workflow import TicketType
 from forge.sandbox import ContainerRunner
 from forge.workflow.feature.state import FeatureState as WorkflowState
 from forge.workflow.nodes.error_handler import notify_error
@@ -47,13 +48,14 @@ async def implement_task(state: WorkflowState) -> WorkflowState:
     workspace_path = state.get("workspace_path")
     current_task = state.get("current_task_key")
     task_keys = state.get("task_keys", [])
+    implementation_node = _implementation_node_name(state)
 
     if not workspace_path:
         logger.error(f"No workspace for implementation on {ticket_key}")
         return {
             **state,
             "last_error": "Workspace not set up",
-            "current_node": "implement_bug_fix",
+            "current_node": implementation_node,
         }
 
     # Get next task to implement if not set
@@ -168,7 +170,7 @@ async def implement_task(state: WorkflowState) -> WorkflowState:
                     **state,
                     "current_task_key": None,
                     "implemented_tasks": implemented,
-                    "current_node": "implement_bug_fix",
+                    "current_node": implementation_node,
                     "last_error": None,
                     "retry_count": 0,
                 }
@@ -187,11 +189,16 @@ async def implement_task(state: WorkflowState) -> WorkflowState:
         return {
             **state,
             "last_error": str(e),
-            "current_node": "implement_bug_fix",
+            "current_node": implementation_node,
             "retry_count": state.get("retry_count", 0) + 1,
         }
     finally:
         await jira.close()
+
+
+def _implementation_node_name(state: WorkflowState) -> str:
+    """Return the implementation node name for the active workflow graph."""
+    return "implement_bug_fix" if state.get("ticket_type") == TicketType.BUG else "implement_task"
 
 
 def _clean_forge_gitignore(workspace_path: Path) -> None:

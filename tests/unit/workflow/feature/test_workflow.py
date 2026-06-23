@@ -136,3 +136,33 @@ class TestFeatureWorkflow:
         }
 
         assert route_by_ticket_type(state) == "update_single_task"
+
+    def test_resume_implement_task_stays_on_implementation_node(self):
+        """Retrying feature implementation should not reroute through task_router."""
+        state = {
+            "ticket_key": "TEST-123",
+            "ticket_type": TicketType.FEATURE,
+            "current_node": "implement_task",
+        }
+
+        assert route_by_ticket_type(state) == "implement_task"
+
+    def test_resume_legacy_implementation_alias_stays_on_implementation_node(self):
+        """Legacy feature implementation checkpoints should retry implementation."""
+        state = {
+            "ticket_key": "TEST-123",
+            "ticket_type": TicketType.FEATURE,
+            "current_node": "implementation",
+        }
+
+        assert route_by_ticket_type(state) == "implement_task"
+
+    def test_resume_polluted_bug_implementation_node_stays_on_implementation_node(self):
+        """Feature checkpoints polluted with bug node names should not restart PRD generation."""
+        state = {
+            "ticket_key": "TEST-123",
+            "ticket_type": TicketType.FEATURE,
+            "current_node": "implement_bug_fix",
+        }
+
+        assert route_by_ticket_type(state) == "implement_task"

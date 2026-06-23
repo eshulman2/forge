@@ -117,11 +117,11 @@ def route_by_ticket_type(state: FeatureState) -> str:
             return "task_approval_gate"
         elif current_node == "wait_for_ci_gate":
             return "wait_for_ci_gate"
+        elif current_node in ("implement_task", "implementation", "implement_bug_fix"):
+            return "implement_task"
         elif current_node in (
             "task_router",
             "setup_workspace",
-            "implement_task",
-            "implementation",
             "create_pr",
             "teardown_workspace",
             "blocked",
