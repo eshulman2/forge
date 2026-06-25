@@ -1,7 +1,10 @@
 """Tests for the implement_review node and review_response_gate (proposal 007)."""
 
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 from langgraph.graph import END
+
 from tests.fixtures.workflow_states import make_workflow_state
 
 # ── State fields ──────────────────────────────────────────────────────────────
@@ -228,8 +231,6 @@ class TestImplementReviewErrorHandling:
     @pytest.mark.asyncio
     async def test_workspace_prepare_failure_increments_retry_count(self):
         """ValueError from prepare_workspace increments retry_count."""
-        from unittest.mock import patch
-
         from forge.workflow.nodes.implement_review import implement_review
 
         state = make_workflow_state(
@@ -249,3 +250,74 @@ class TestImplementReviewErrorHandling:
         assert result["current_node"] == "implement_review"
         assert result["retry_count"] == 2
         assert "workspace gone" in result["last_error"]
+
+
+class TestImplementReviewStatusComment:
+
+    @pytest.mark.asyncio
+    async def test_posts_addressing_review_comment_when_review_work_starts(self, tmp_path):
+        """implement_review posts an informational PR status when work starts."""
+        from forge.workflow.nodes.implement_review import (
+            _REVIEW_ADDRESSING_COMMENT,
+            implement_review,
+        )
+
+        mock_git = MagicMock()
+        mock_git._run_git.return_value = MagicMock(stdout="")
+        mock_github = MagicMock()
+        mock_github.create_issue_comment = AsyncMock()
+        mock_github.close = AsyncMock()
+        mock_runner = MagicMock()
+        mock_runner.run = AsyncMock()
+
+        state = make_workflow_state(
+            current_node="implement_review",
+            ticket_key="TEST-456",
+            workspace_path=str(tmp_path),
+            current_repo="org/repo",
+            feedback_comment="Please simplify this flow.",
+            current_pr_number=17,
+            context={"branch_name": "forge/TEST-456"},
+        )
+
+        with (
+            patch(
+                "forge.workflow.nodes.implement_review.prepare_workspace",
+                return_value=(str(tmp_path), mock_git),
+            ),
+            patch(
+                "forge.workflow.nodes.implement_review._fetch_pr_review_comments",
+                new=AsyncMock(return_value="# PR Review Feedback\n"),
+            ),
+            patch("forge.workflow.nodes.implement_review.GitHubClient", return_value=mock_github),
+            patch("forge.workflow.nodes.implement_review.ContainerRunner", return_value=mock_runner),
+        ):
+            result = await implement_review(state)
+
+        mock_github.create_issue_comment.assert_called_once_with(
+            "org",
+            "repo",
+            17,
+            _REVIEW_ADDRESSING_COMMENT,
+        )
+        mock_github.close.assert_called_once()
+        mock_runner.run.assert_called_once()
+        assert result["current_node"] == "human_review_gate"
+
+    @pytest.mark.asyncio
+    async def test_skips_addressing_review_comment_without_pr_number(self):
+        """No PR comment is posted if the workflow has no PR number."""
+        from forge.workflow.nodes.implement_review import _post_review_addressing_comment
+
+        mock_github = MagicMock()
+        mock_github.create_issue_comment = AsyncMock()
+
+        with patch("forge.workflow.nodes.implement_review.GitHubClient", return_value=mock_github):
+            await _post_review_addressing_comment(
+                ticket_key="TEST-789",
+                owner="org",
+                repo="repo",
+                pr_number=None,
+            )
+
+        mock_github.create_issue_comment.assert_not_called()

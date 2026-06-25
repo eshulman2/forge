@@ -21,6 +21,9 @@ logger = logging.getLogger(__name__)
 _REVIEW_COMMENTS_FILE = ".forge/review-comments.md"
 _REVIEW_PLAN_FILE = ".forge/review-plan.md"
 _REVIEW_OBJECTIONS_FILE = ".forge/review-objections.md"
+_REVIEW_ADDRESSING_COMMENT = (
+    "Forge is addressing PR review feedback now. This status update is informational."
+)
 
 
 def review_response_gate(state: WorkflowState) -> WorkflowState:
@@ -136,6 +139,13 @@ async def implement_review(state: WorkflowState) -> WorkflowState:
 
         # ── Phase 0: Fetch all PR review comments from GitHub ─────────────────
         _owner, _, _repo = current_repo.partition("/")
+        await _post_review_addressing_comment(
+            ticket_key=ticket_key,
+            owner=_owner,
+            repo=_repo,
+            pr_number=pr_number,
+        )
+
         review_comments_text = await _fetch_pr_review_comments(
             owner=_owner,
             repo=_repo,
@@ -285,6 +295,27 @@ async def implement_review(state: WorkflowState) -> WorkflowState:
             "current_node": "implement_review",
             "retry_count": state.get("retry_count", 0) + 1,
         }
+
+
+async def _post_review_addressing_comment(
+    ticket_key: str,
+    owner: str,
+    repo: str,
+    pr_number: int | None,
+) -> None:
+    """Post a non-triggering PR status update when review work starts."""
+    if not pr_number:
+        logger.debug(f"Skipping review addressing PR comment for {ticket_key}: no PR number")
+        return
+
+    try:
+        github = GitHubClient()
+        try:
+            await github.create_issue_comment(owner, repo, pr_number, _REVIEW_ADDRESSING_COMMENT)
+        finally:
+            await github.close()
+    except Exception as e:
+        logger.warning(f"Failed to post review addressing PR status for {ticket_key}: {e}")
 
 
 async def _post_review_objection(

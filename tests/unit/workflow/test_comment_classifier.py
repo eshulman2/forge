@@ -78,6 +78,12 @@ class TestClassifyComment:
         assert classify_comment("Great work! Thanks") == CommentType.INFORMATIONAL
         assert classify_comment("This is awesome!") == CommentType.INFORMATIONAL
 
+    def test_review_addressing_status_comment_is_informational(self) -> None:
+        """Forge's own review status update must not request another fix."""
+        from forge.workflow.nodes.implement_review import _REVIEW_ADDRESSING_COMMENT
+
+        assert classify_comment(_REVIEW_ADDRESSING_COMMENT) == CommentType.INFORMATIONAL
+
     def test_empty_comment_is_informational(self) -> None:
         """Empty comments should be informational."""
         assert classify_comment("") == CommentType.INFORMATIONAL
