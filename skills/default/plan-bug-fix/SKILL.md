@@ -5,7 +5,19 @@ description: Produce a concrete implementation plan for a bug fix from an approv
 
 # Bug Fix Planning Skill
 
-Produce a concrete implementation plan that an engineer can execute without re-reading the RCA. You have access to the codebase — use it to confirm file paths, function names, and test locations before writing the plan.
+Produce a concrete implementation plan that an engineer can execute without re-reading the RCA. You have access to the codebase — use it to confirm file paths, function names, test locations, and repository standards before writing the plan.
+
+## Repository Grounding
+
+Before writing the plan:
+
+1. Inspect the relevant repository paths named by the RCA and selected fix approach.
+2. Read repository guidance when present, including `AGENTS.md`, `CLAUDE.md`, `.claude/AGENTS.md`, `.claude/CLAUDE.md`, `README.md`, `CONTRIBUTING.md`, `Makefile`, language-specific project files, docs, and repo-local skills or agent instructions.
+3. Identify existing standards for architecture, naming, error handling, tests, generated files, documentation, and local agent workflow.
+4. Confirm every planned file, function, class, test location, and command against the codebase or repository guidance.
+5. Prefer existing abstractions and helpers over new patterns.
+
+If you cannot inspect the relevant repository, do not guess file paths, symbols, test commands, or implementation standards. Make the access problem explicit in the plan so implementation does not proceed from invented details.
 
 ## What the Plan Must Cover
 
@@ -19,7 +31,9 @@ Produce a concrete implementation plan that an engineer can execute without re-r
 
 5. **Precision** — the plan must be specific enough that an implementer can execute it without reading the RCA again.
 
-6. **Ordering-sensitive operations** — after drafting all code changes, scan each function and block in the plan for pairs of operations where order matters because of non-obvious side effects. For each, write an entry under a top-level `## Ordering Invariants` heading with three fields:
+6. **Repository standards** — the plan must follow standards discovered from repository guidance and existing implementation patterns. If a deviation is required, explain why.
+
+7. **Ordering-sensitive operations** — after drafting all code changes, scan each function and block in the plan for pairs of operations where order matters because of non-obvious side effects. For each, write an entry under a top-level `## Ordering Invariants` heading with three fields:
    - **What**: the two operations and their required order (e.g. `` `A()` → `B()` ``)
    - **Why**: the side effect or dependency that makes the order matter
    - **Breaks if reversed**: the concrete failure mode

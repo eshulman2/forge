@@ -406,7 +406,7 @@ def _parse_tasks_response(response: str) -> list[dict[str, str]]:
         elif stripped.startswith("REPO:"):
             repo = stripped[5:].strip().lower()
             # Clean up repo name
-            repo = re.sub(r"[^a-z0-9\-_]", "", repo)
+            repo = re.sub(r"[^a-z0-9/._-]", "", repo)
             current_task["repo"] = repo if repo else "unknown"
         elif stripped.startswith("DESCRIPTION:"):
             current_section = "description"

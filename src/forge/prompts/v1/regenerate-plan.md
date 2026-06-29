@@ -27,6 +27,16 @@ Use only these exact repository names when tagging `repo:<owner>/<name>`:
 
 {known_repos}
 
+## Repository Re-check Requirements
+
+If the feedback changes or questions implementation scope, repository scope, files, functions/classes, tests, generated artifacts, validation commands, or project conventions, re-inspect the relevant repository before revising `.forge/plan.md`.
+
+- Read repo guidance when present: `AGENTS.md`, `CLAUDE.md`, `.claude/AGENTS.md`, `.claude/CLAUDE.md`, `README.md`, `CONTRIBUTING.md`, `Makefile`, language-specific project files, docs, and repo-local skills or agent instructions.
+- Confirm revised files, symbols, tests, commands, and generated-file requirements against real repository contents.
+- Preserve valid grounded details from the original plan when feedback does not challenge them.
+- Follow discovered repository standards for architecture, naming, error handling, testing, packaging, documentation, and local agent workflow.
+- Do not invent paths, symbols, frameworks, test runners, or directory layouts. If repository inspection is required but unavailable, write the revised plan with an explicit blocking note explaining what repo access or configuration is required.
+
 ---
 
 Revise the plan using the regenerate-plan skill, addressing all feedback.

@@ -27,16 +27,18 @@ Previous tasks in this workflow: {previous_task_keys}
 
 1. Read `.forge/handoff.md` first (if it exists) to understand prior work
 2. Read and understand the existing codebase structure
-3. Implement the task following the repository's coding standards
-4. Write clean, well-documented code
-5. Run targeted validation to verify your changes (see Build Validation Guidelines)
-6. **Regenerate any derived files** if you modified types or interfaces (see Code Generation Guidelines)
-7. **Lint and format your changes** before committing (see Lint & Format Guidelines)
-8. **REQUIRED: Update `.forge/handoff.md`** (see Handoff Update section below)
-9. Commit your implementation with a descriptive message
-10. Do NOT push to git - only commit your changes locally
+3. Read repository guidance when present, including `AGENTS.md`, `CLAUDE.md`, `.claude/AGENTS.md`, `.claude/CLAUDE.md`, `README.md`, `CONTRIBUTING.md`, `Makefile`, language-specific project files, docs, and repo-local skills or agent instructions
+4. Identify and follow repository standards for architecture, naming, error handling, testing, generated files, documentation, and local agent workflow
+5. Implement the task following the repository's coding standards
+6. Write clean, well-documented code
+7. Run targeted validation to verify your changes (see Build Validation Guidelines)
+8. **Regenerate any derived files** if you modified types or interfaces (see Code Generation Guidelines)
+9. **Lint and format your changes** before committing (see Lint & Format Guidelines)
+10. **REQUIRED: Update `.forge/handoff.md`** (see Handoff Update section below)
+11. Commit your implementation with a descriptive message
+12. Do NOT push to git - only commit your changes locally
 
-**IMPORTANT**: Step 8 (handoff update) is REQUIRED even if the task fails. Always document what you attempted and any blockers encountered.
+**IMPORTANT**: Step 10 (handoff update) is REQUIRED even if the task fails. Always document what you attempted and any blockers encountered.
 
 ## Git Commit Rules
 
@@ -120,7 +122,7 @@ You have access to these tools:
 If you add or modify types, structs, or interfaces, check whether the project requires regenerating derived files (schemas, deepcopy functions, mocks, API clients, etc.).
 
 **First**, look for codegen instructions in the project:
-- `README.md`, `CONTRIBUTING.md`, or `Makefile` — look for `generate`, `codegen`, or `go generate` sections
+- `AGENTS.md`, `CLAUDE.md`, `README.md`, `CONTRIBUTING.md`, or `Makefile` — look for `generate`, `codegen`, or `go generate` sections
 - `//go:generate` directives in the files you modified — run them with `go generate <file>` or `go generate ./pkg/...`
 - Scripts like `hack/generate*.sh`, `scripts/generate.sh`, or similar
 
@@ -143,7 +145,7 @@ If you add or modify types, structs, or interfaces, check whether the project re
 Always lint and auto-format changed files before committing.
 
 **First**, check whether the project documents its lint/format commands:
-- Look for a `README.md`, `CONTRIBUTING.md`, or `Makefile` at the repo root
+- Look for `AGENTS.md`, `CLAUDE.md`, `README.md`, `CONTRIBUTING.md`, or `Makefile` at the repo root
 - If lint/format commands are documented there, use those — they reflect the project's actual tooling
 
 **If no project-specific instructions exist or if the command from the guide doesn't work**, fall back to these common defaults:

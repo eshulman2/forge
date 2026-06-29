@@ -7,6 +7,7 @@ import pytest
 from forge.integrations.jira.models import JiraIssue
 from forge.workflow.nodes.task_generation import (
     _generate_tasks_for_epic,
+    _parse_tasks_response,
     generate_tasks,
     regenerate_all_tasks,
     regenerate_epic_tasks,
@@ -210,6 +211,46 @@ class TestFeedbackThreading:
         )
 
         assert "Revision Feedback" not in captured_prompts[0]
+
+
+class TestParseTasksResponse:
+    """Tests for task response parsing."""
+
+    def test_preserves_owner_repo_format(self):
+        """Task-level REPO values keep owner/repo format for routing."""
+        response = """
+---
+TASK: Update backend auth flow
+REPO: Acme/Backend-Service
+DESCRIPTION:
+- Modify the auth workflow.
+ACCEPTANCE_CRITERIA:
+- [ ] Tests pass
+---
+"""
+
+        tasks = _parse_tasks_response(response)
+
+        assert len(tasks) == 1
+        assert tasks[0]["repo"] == "acme/backend-service"
+
+    def test_preserves_dots_in_repo_name(self):
+        """Dotted repo/org names are valid on GitHub and must survive parsing."""
+        response = """
+---
+TASK: Fix config loader
+REPO: my.org/my.config.repo
+DESCRIPTION:
+- Update loader.
+ACCEPTANCE_CRITERIA:
+- [ ] Tests pass
+---
+"""
+
+        tasks = _parse_tasks_response(response)
+
+        assert len(tasks) == 1
+        assert tasks[0]["repo"] == "my.org/my.config.repo"
 
 
 def _make_issue(key, summary="S", description="D", parent_key=None, project_key="MYPROJ"):

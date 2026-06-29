@@ -15,6 +15,20 @@ Generate implementation Tasks from Epic plans following the guidelines below.
 4. Identify which repository each Task belongs to
 5. Order Tasks by dependency (foundation first)
 
+## Repository Grounding
+
+Tasks must preserve the repository grounding established by the Epic plan.
+
+Before decomposing Tasks:
+
+1. Check whether the Epic plan names real repository paths, existing components, tests, and repo guidance that were inspected.
+2. Use those grounded paths and standards when splitting work into Tasks.
+3. If the Epic plan lacks enough repository evidence for a concrete Task, do not invent files, packages, frameworks, test runners, or directory layouts.
+4. When repository tools are available, inspect the target repository to fill in missing implementation details before naming files or functions.
+5. Follow discovered repository standards for architecture, naming, testing, packaging, documentation, and local agent workflow.
+
+If repository grounding is unavailable, keep the Task scoped to the investigation or access needed to ground the work instead of turning assumptions into implementation steps.
+
 ## Task Sizing Rules
 
 1. **Atomic**: Each Task should be completable in a single PR
@@ -49,4 +63,6 @@ Before returning the Task breakdown:
 - [ ] Acceptance criteria are specific and testable
 - [ ] Dependencies are identified and ordered correctly
 - [ ] Repository assignments are clear
+- [ ] File paths, test targets, and implementation conventions are grounded in the Epic plan or inspected repository
+- [ ] Tasks follow discovered repository standards
 - [ ] No gaps - full Epic coverage across all Tasks

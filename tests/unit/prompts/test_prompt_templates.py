@@ -114,6 +114,29 @@ class TestVariableSubstitution:
         assert "ignored" not in result
 
 
+class TestDecomposeEpicsPrompt:
+    """Tests for Epic decomposition prompt guardrails."""
+
+    def test_decompose_epics_requires_repository_grounding(self):
+        """Epic decomposition should require real repo inspection before paths."""
+        result = load_prompt(
+            "decompose-epics",
+            spec_content="Spec content",
+            feature_summary="Feature summary",
+            project_key="AISOS",
+            repo_instruction="AVAILABLE REPOSITORIES:\n  - forge-sdlc/forge",
+        )
+
+        assert "Repository Grounding Requirements" in result
+        assert "inspect every target repository" in result
+        assert "AGENTS.md" in result
+        assert "CLAUDE.md" in result
+        assert "repository standards" in result
+        assert "test runner" in result
+        assert "Do not invent generic paths" in result
+        assert "repo grounding failed" in result
+
+
 class TestVersionManagement:
     """Test prompt version management."""
 

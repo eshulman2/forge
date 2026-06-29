@@ -13,8 +13,12 @@ You have produced an implementation plan that the engineering team has reviewed.
 
 2. **Preserve what was not objected to** — only change the parts the feedback targets.
 
-3. **Re-verify file paths and function names** if the feedback raises doubts about them.
+3. **Re-verify repository grounding** when feedback changes implementation scope, repository scope, files, functions, tests, generated artifacts, validation commands, or project conventions.
 
-4. **Keep `repo:<owner>/<name>` tags** for repositories whose scope is unchanged. Update or add tags if the feedback changes the repository scope.
+4. **Re-verify file paths and function names** if the feedback raises doubts about them.
 
-5. **Write the revised plan to `.forge/plan.md`** in the same structured Markdown format. Do not write any other files. Do not commit.
+5. **Follow repository standards** discovered from guidance files and existing implementation patterns. If feedback requests a deviation from a repository standard, explain why the revised plan accepts or rejects that deviation.
+
+6. **Keep `repo:<owner>/<name>` tags** for repositories whose scope is unchanged. Update or add tags if the feedback changes the repository scope.
+
+7. **Write the revised plan to `.forge/plan.md`** in the same structured Markdown format. Do not write any other files. Do not commit.
