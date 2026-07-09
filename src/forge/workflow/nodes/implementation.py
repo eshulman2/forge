@@ -107,6 +107,9 @@ async def implement_task(state: WorkflowState) -> WorkflowState:
     settings = get_settings()
     jira = JiraClient(settings)
 
+    # Store task_summary before try block to ensure availability in exception handler
+    task_summary: str | None = None
+
     try:
         # Get Task details from Jira
         task_issue = await jira.get_issue(current_task)
@@ -151,6 +154,16 @@ async def implement_task(state: WorkflowState) -> WorkflowState:
 
         if result.success:
             logger.info(f"Container completed successfully for {current_task}")
+            logger.info(
+                f"Implementation completed: task_name={task_summary}, feature_id={ticket_key}, task_id={current_task}, status=success",
+                extra={
+                    "event": "implementation_completed",
+                    "task_name": task_summary,
+                    "feature_id": ticket_key,
+                    "task_id": current_task,
+                    "status": "success",
+                },
+            )
 
             # Track implemented tasks
             implemented = state.get("implemented_tasks", [])
@@ -172,6 +185,16 @@ async def implement_task(state: WorkflowState) -> WorkflowState:
             # committing when they pass. If we get here, implementation failed.
             error_msg = result.error_message or "Unknown container error"
             logger.error(f"Implementation failed for {current_task}: {error_msg}")
+            logger.info(
+                f"Implementation completed: task_name={task_summary}, feature_id={ticket_key}, task_id={current_task}, status=failure",
+                extra={
+                    "event": "implementation_completed",
+                    "task_name": task_summary,
+                    "feature_id": ticket_key,
+                    "task_id": current_task,
+                    "status": "failure",
+                },
+            )
             raise RuntimeError(error_msg)
 
     except Exception as e:
@@ -179,6 +202,17 @@ async def implement_task(state: WorkflowState) -> WorkflowState:
         from forge.workflow.nodes.error_handler import notify_error
 
         await notify_error(state, str(e), "implement_task")
+        task_name_for_log = task_summary or "unknown"
+        logger.info(
+            f"Implementation completed: task_name={task_name_for_log}, feature_id={ticket_key}, task_id={current_task}, status=failure",
+            extra={
+                "event": "implementation_completed",
+                "task_name": task_name_for_log,
+                "feature_id": ticket_key,
+                "task_id": current_task,
+                "status": "failure",
+            },
+        )
         return {
             **state,
             "last_error": str(e),
