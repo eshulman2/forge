@@ -275,3 +275,45 @@ class TestImplementationStructuredLogging:
         assert end_record.__dict__.get("feature_id") == "PROJ-999"
         assert end_record.__dict__.get("task_id") == "IMPL-777"
         assert end_record.__dict__.get("status") == "success"
+
+    @pytest.mark.asyncio
+    async def test_failure_log_uses_unknown_when_jira_fails_before_task_summary(self, caplog):
+        """Edge case: Jira fails before task_summary is retrieved — uses 'unknown' fallback."""
+        state = _make_state(
+            ticket_key="FEAT-700",
+            current_task_key="TASK-60",
+        )
+
+        # Jira fails BEFORE task_summary is set
+        mock_jira = MagicMock()
+        mock_jira.get_issue = AsyncMock(side_effect=RuntimeError("Jira connection failed"))
+        mock_jira.close = AsyncMock()
+
+        with (
+            patch("forge.workflow.nodes.implementation.JiraClient", return_value=mock_jira),
+            patch("forge.workflow.nodes.implementation.ContainerRunner"),
+            patch("forge.workflow.nodes.implementation.get_settings", return_value=MagicMock()),
+            patch("forge.workflow.nodes.error_handler.notify_error", new_callable=AsyncMock),
+            caplog.at_level(logging.INFO),
+        ):
+            result = await implement_task(state)
+
+        # Verify exception was handled
+        assert result.get("last_error") is not None
+        assert "Jira connection failed" in result.get("last_error", "")
+
+        # Find the failure log record - task_name should be "unknown"
+        end_records = [
+            r
+            for r in caplog.records
+            if "Implementation completed" in r.message and "status=failure" in r.message
+        ]
+        assert len(end_records) >= 1, "Expected failure log even when Jira fails"
+
+        record = end_records[0]
+        assert record.__dict__.get("status") == "failure"
+        assert record.__dict__.get("event") == "implementation_completed"
+        # When Jira fails before task_summary is set, it should use "unknown" fallback
+        assert record.__dict__.get("task_name") == "unknown"
+        assert record.__dict__.get("feature_id") == "FEAT-700"
+        assert record.__dict__.get("task_id") == "TASK-60"
