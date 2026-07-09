@@ -183,18 +183,10 @@ async def implement_task(state: WorkflowState) -> WorkflowState:
             # Container failed - treat all failures the same
             # The container agent is responsible for running tests and only
             # committing when they pass. If we get here, implementation failed.
+            # Note: The failure log is emitted in the exception handler to avoid
+            # duplicate logging when RuntimeError is raised and caught below.
             error_msg = result.error_message or "Unknown container error"
             logger.error(f"Implementation failed for {current_task}: {error_msg}")
-            logger.info(
-                f"Implementation completed: task_name={task_summary}, feature_id={ticket_key}, task_id={current_task}, status=failure",
-                extra={
-                    "event": "implementation_completed",
-                    "task_name": task_summary,
-                    "feature_id": ticket_key,
-                    "task_id": current_task,
-                    "status": "failure",
-                },
-            )
             raise RuntimeError(error_msg)
 
     except Exception as e:
