@@ -311,6 +311,25 @@ class TestLogStepStart:
         assert "Step starting" in info_records[0].message
         assert "Step ended" not in info_records[0].message
 
+    def test_log_step_start_includes_task_name_feature_id_task_id_in_log(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """log_step_start includes task_name, feature_id, task_id fields in log."""
+        with caplog.at_level(logging.INFO, logger="forge.utils.step_logger"):
+            log_step_start(
+                task_name="my-task",
+                feature_id="FEAT-999",
+                task_id="TASK-888",
+            )
+
+        info_records = [r for r in caplog.records if r.levelno == logging.INFO]
+        assert len(info_records) == 1
+
+        message = info_records[0].message
+        assert "task_name=my-task" in message
+        assert "feature_id=FEAT-999" in message
+        assert "task_id=TASK-888" in message
+
 
 # -----------------------------------------------------------------------------
 # Tests for log_step_end
