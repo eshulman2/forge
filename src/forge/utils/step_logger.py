@@ -5,6 +5,8 @@ during step logging operations.
 """
 
 import logging
+from collections.abc import Generator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -147,3 +149,34 @@ def log_step_end(
             "task_id": effective_task_id,
         },
     )
+
+
+@contextmanager
+def step_logging_context(
+    task_name: str | None,
+    feature_id: str | None,
+    task_id: str | None,
+) -> Generator[None, None, None]:
+    """Context manager for automatic step start/end logging.
+
+    Logs the start of a workflow step on entry and the end of the step
+    on exit. The end log is always emitted, even if an exception occurs.
+
+    Example:
+        with step_logging_context("deploy-service", "FEAT-123", "TASK-456"):
+            # implementation step logic
+            ...
+
+    Args:
+        task_name: The name of the current task.
+        feature_id: The feature identifier.
+        task_id: The task identifier.
+
+    Yields:
+        None
+    """
+    log_step_start(task_name, feature_id, task_id)
+    try:
+        yield
+    finally:
+        log_step_end(task_name, feature_id, task_id)
