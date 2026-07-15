@@ -2,6 +2,7 @@
 
 import logging
 import re
+import time
 
 import pytest
 
@@ -10,6 +11,7 @@ from forge.utils.step_logger import (
     ValidationResult,
     log_step_end,
     log_step_start,
+    step_logging_context,
     validate_context,
 )
 
@@ -495,3 +497,196 @@ class TestLogStepStartAndEndDifferentiation:
         # First log should indicate start, second should indicate end
         assert "Step starting" in info_records[0].message
         assert "Step ended" in info_records[1].message
+
+
+# -----------------------------------------------------------------------------
+# Tests for step_logging_context
+# -----------------------------------------------------------------------------
+
+
+class TestStepLoggingContext:
+    """Tests for step_logging_context context manager."""
+
+    def test_context_manager_logs_start_and_end_on_success(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Context manager logs start and end on successful execution."""
+        with (
+            caplog.at_level(logging.INFO, logger="forge.utils.step_logger"),
+            step_logging_context(
+                task_name="deploy-service",
+                feature_id="FEAT-123",
+                task_id="TASK-456",
+            ),
+        ):
+            pass  # Successful execution
+
+        info_records = [r for r in caplog.records if r.levelno == logging.INFO]
+        assert len(info_records) == 2
+
+        # First log should indicate start, second should indicate end
+        assert "Step starting" in info_records[0].message
+        assert "Step ended" in info_records[1].message
+
+        # Both logs should contain context values
+        for record in info_records:
+            assert "deploy-service" in record.message
+            assert "FEAT-123" in record.message
+            assert "TASK-456" in record.message
+
+    def test_context_manager_logs_start_and_end_when_exception_raised(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Context manager logs start and end when exception is raised."""
+        with (
+            caplog.at_level(logging.INFO, logger="forge.utils.step_logger"),
+            pytest.raises(ValueError, match="test error"),
+            step_logging_context(
+                task_name="deploy-service",
+                feature_id="FEAT-123",
+                task_id="TASK-456",
+            ),
+        ):
+            raise ValueError("test error")
+
+        info_records = [r for r in caplog.records if r.levelno == logging.INFO]
+        assert len(info_records) == 2
+
+        # First log should indicate start, second should indicate end
+        assert "Step starting" in info_records[0].message
+        assert "Step ended" in info_records[1].message
+
+    def test_context_manager_exception_is_reraised_not_swallowed(self) -> None:
+        """Exception is re-raised after end log (not swallowed)."""
+        with (
+            pytest.raises(RuntimeError, match="intentional exception"),
+            step_logging_context(
+                task_name="deploy-service",
+                feature_id="FEAT-123",
+                task_id="TASK-456",
+            ),
+        ):
+            raise RuntimeError("intentional exception")
+
+    def test_context_manager_end_log_emitted_before_exception_propagates(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """End log is emitted before exception propagates.
+
+        This test verifies that the finally block executes and logs
+        'Step ended' before the exception reaches the outer scope.
+        """
+        end_log_emitted = False
+        exception_caught = False
+
+        with caplog.at_level(logging.INFO, logger="forge.utils.step_logger"):
+            try:
+                with step_logging_context(
+                    task_name="deploy-service",
+                    feature_id="FEAT-123",
+                    task_id="TASK-456",
+                ):
+                    raise ValueError("test error")
+            except ValueError:
+                # Check if end log was emitted before we caught the exception
+                info_records = [r for r in caplog.records if r.levelno == logging.INFO]
+                end_log_emitted = any("Step ended" in r.message for r in info_records)
+                exception_caught = True
+
+        # Verify both conditions
+        assert exception_caught, "Exception should have been caught"
+        assert end_log_emitted, "End log should be emitted before exception propagates"
+
+
+# -----------------------------------------------------------------------------
+# Performance Tests
+# -----------------------------------------------------------------------------
+
+
+class TestStepLoggerPerformance:
+    """Performance tests for step logger functions.
+
+    These tests verify logging overhead is <10ms per call as specified
+    in FN-001/FN-002 requirements. This is a basic sanity check,
+    not a rigorous benchmark.
+    """
+
+    def test_log_step_start_overhead_under_10ms(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Verify log_step_start overhead is <10ms per call."""
+        iterations = 100
+        max_allowed_ms = 10.0
+
+        with caplog.at_level(logging.INFO, logger="forge.utils.step_logger"):
+            start_time = time.perf_counter()
+            for _ in range(iterations):
+                log_step_start(
+                    task_name="deploy-service",
+                    feature_id="FEAT-123",
+                    task_id="TASK-456",
+                )
+            end_time = time.perf_counter()
+
+        total_duration_ms = (end_time - start_time) * 1000
+        average_duration_ms = total_duration_ms / iterations
+
+        assert average_duration_ms < max_allowed_ms, (
+            f"log_step_start average duration {average_duration_ms:.3f}ms "
+            f"exceeds {max_allowed_ms}ms threshold"
+        )
+
+    def test_log_step_end_overhead_under_10ms(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Verify log_step_end overhead is <10ms per call."""
+        iterations = 100
+        max_allowed_ms = 10.0
+
+        with caplog.at_level(logging.INFO, logger="forge.utils.step_logger"):
+            start_time = time.perf_counter()
+            for _ in range(iterations):
+                log_step_end(
+                    task_name="deploy-service",
+                    feature_id="FEAT-123",
+                    task_id="TASK-456",
+                )
+            end_time = time.perf_counter()
+
+        total_duration_ms = (end_time - start_time) * 1000
+        average_duration_ms = total_duration_ms / iterations
+
+        assert average_duration_ms < max_allowed_ms, (
+            f"log_step_end average duration {average_duration_ms:.3f}ms "
+            f"exceeds {max_allowed_ms}ms threshold"
+        )
+
+    def test_step_logging_context_overhead_under_10ms(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Verify step_logging_context overhead is <10ms per call.
+
+        Note: This measures the combined overhead of start + end logging.
+        The 10ms threshold applies to the context manager entry/exit combined.
+        """
+        iterations = 100
+        max_allowed_ms = 10.0
+
+        with caplog.at_level(logging.INFO, logger="forge.utils.step_logger"):
+            start_time = time.perf_counter()
+            for _ in range(iterations):
+                with step_logging_context(
+                    task_name="deploy-service",
+                    feature_id="FEAT-123",
+                    task_id="TASK-456",
+                ):
+                    pass  # Empty context block
+            end_time = time.perf_counter()
+
+        total_duration_ms = (end_time - start_time) * 1000
+        average_duration_ms = total_duration_ms / iterations
+
+        assert average_duration_ms < max_allowed_ms, (
+            f"step_logging_context average duration {average_duration_ms:.3f}ms "
+            f"exceeds {max_allowed_ms}ms threshold"
+        )
