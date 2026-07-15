@@ -611,9 +611,7 @@ class TestStepLoggerPerformance:
     not a rigorous benchmark.
     """
 
-    def test_log_step_start_overhead_under_10ms(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_log_step_start_overhead_under_10ms(self, caplog: pytest.LogCaptureFixture) -> None:
         """Verify log_step_start overhead is <10ms per call."""
         iterations = 100
         max_allowed_ms = 10.0
@@ -636,9 +634,7 @@ class TestStepLoggerPerformance:
             f"exceeds {max_allowed_ms}ms threshold"
         )
 
-    def test_log_step_end_overhead_under_10ms(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_log_step_end_overhead_under_10ms(self, caplog: pytest.LogCaptureFixture) -> None:
         """Verify log_step_end overhead is <10ms per call."""
         iterations = 100
         max_allowed_ms = 10.0

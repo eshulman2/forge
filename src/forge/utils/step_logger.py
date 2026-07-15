@@ -8,7 +8,7 @@ import logging
 from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 
 logger = logging.getLogger(__name__)
 
@@ -91,8 +91,8 @@ def log_step_start(
     effective_feature_id = feature_id if feature_id else PLACEHOLDER_UNAVAILABLE
     effective_task_id = task_id if task_id else PLACEHOLDER_UNAVAILABLE
 
-    # Generate ISO 8601 timestamp
-    timestamp = datetime.utcnow().isoformat() + "Z"
+    # Generate ISO 8601 timestamp (using timezone-aware UTC)
+    timestamp = datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
     # Emit INFO log with structured fields
     logger.info(
@@ -134,8 +134,8 @@ def log_step_end(
     effective_feature_id = feature_id if feature_id else PLACEHOLDER_UNAVAILABLE
     effective_task_id = task_id if task_id else PLACEHOLDER_UNAVAILABLE
 
-    # Generate ISO 8601 timestamp
-    timestamp = datetime.utcnow().isoformat() + "Z"
+    # Generate ISO 8601 timestamp (using timezone-aware UTC)
+    timestamp = datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
     # Emit INFO log with structured fields
     logger.info(
