@@ -12,6 +12,7 @@ Architecture:
 """
 
 import logging
+from datetime import UTC, datetime
 from pathlib import Path
 
 from forge.config import get_settings
@@ -120,6 +121,7 @@ async def implement_task(state: WorkflowState) -> WorkflowState:
             f"Implementation started for task {current_task}",
             extra={
                 "event": "implementation_started",
+                "timestamp": datetime.now(UTC).isoformat(),
                 "task_name": task_summary,
                 "feature_id": ticket_key,
                 "task_id": current_task,
@@ -160,6 +162,7 @@ async def implement_task(state: WorkflowState) -> WorkflowState:
                 f"Implementation completed for task {current_task}",
                 extra={
                     "event": "implementation_completed",
+                    "timestamp": datetime.now(UTC).isoformat(),
                     "task_name": task_summary,
                     "feature_id": ticket_key,
                     "task_id": current_task,
@@ -198,6 +201,7 @@ async def implement_task(state: WorkflowState) -> WorkflowState:
             f"Implementation ended for task {task_id}",
             extra={
                 "event": "implementation_ended",
+                "timestamp": datetime.now(UTC).isoformat(),
                 "task_name": task_summary,
                 "feature_id": ticket_key,
                 "task_id": task_id,

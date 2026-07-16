@@ -1,12 +1,16 @@
 """Unit tests for implement_task structured logging."""
 
 import logging
+import re
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from tests.fixtures.workflow_states import make_workflow_state
 
 from forge.integrations.jira.models import JiraIssue
+
+# ISO 8601 timestamp pattern (e.g., "2024-01-15T10:30:00.123456+00:00")
+ISO_8601_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?\+\d{2}:\d{2}$")
 
 
 def _make_state(
@@ -111,6 +115,10 @@ class TestImplementTaskStructuredLogging:
         record = started_records[0]
         assert record.levelno == logging.INFO
         assert record.event == "implementation_started"
+        assert hasattr(record, "timestamp"), "Expected timestamp field in log record"
+        assert ISO_8601_PATTERN.match(record.timestamp), (
+            f"Invalid ISO 8601 timestamp: {record.timestamp}"
+        )
         assert record.task_name == "Implement login feature"
         assert record.feature_id == "FEAT-100"
         assert record.task_id == "TASK-200"
@@ -143,6 +151,10 @@ class TestImplementTaskStructuredLogging:
         record = completed_records[0]
         assert record.levelno == logging.INFO
         assert record.event == "implementation_completed"
+        assert hasattr(record, "timestamp"), "Expected timestamp field in log record"
+        assert ISO_8601_PATTERN.match(record.timestamp), (
+            f"Invalid ISO 8601 timestamp: {record.timestamp}"
+        )
         assert record.task_name == "Implement login feature"
         assert record.feature_id == "FEAT-100"
         assert record.task_id == "TASK-200"
@@ -175,6 +187,10 @@ class TestImplementTaskStructuredLogging:
         record = ended_records[0]
         assert record.levelno == logging.INFO
         assert record.event == "implementation_ended"
+        assert hasattr(record, "timestamp"), "Expected timestamp field in log record"
+        assert ISO_8601_PATTERN.match(record.timestamp), (
+            f"Invalid ISO 8601 timestamp: {record.timestamp}"
+        )
         assert record.task_name == "Implement login feature"
         assert record.feature_id == "FEAT-100"
         assert record.task_id == "TASK-200"
@@ -210,6 +226,10 @@ class TestImplementTaskStructuredLogging:
         record = ended_records[0]
         assert record.levelno == logging.INFO
         assert record.event == "implementation_ended"
+        assert hasattr(record, "timestamp"), "Expected timestamp field in log record"
+        assert ISO_8601_PATTERN.match(record.timestamp), (
+            f"Invalid ISO 8601 timestamp: {record.timestamp}"
+        )
         assert record.task_name == "Implement login feature"
         assert record.feature_id == "FEAT-100"
         assert record.task_id == "TASK-200"
@@ -244,6 +264,10 @@ class TestImplementTaskStructuredLogging:
         record = ended_records[0]
         assert record.levelno == logging.INFO
         assert record.event == "implementation_ended"
+        assert hasattr(record, "timestamp"), "Expected timestamp field in log record"
+        assert ISO_8601_PATTERN.match(record.timestamp), (
+            f"Invalid ISO 8601 timestamp: {record.timestamp}"
+        )
         assert record.task_name == "unknown"
         assert record.feature_id == "FEAT-100"
         assert record.task_id == "TASK-200"
@@ -274,6 +298,10 @@ class TestImplementTaskStructuredLogging:
 
         record = started_records[0]
         assert record.levelno == logging.INFO
+        assert hasattr(record, "timestamp"), "Expected timestamp field in log record"
+        assert ISO_8601_PATTERN.match(record.timestamp), (
+            f"Invalid ISO 8601 timestamp: {record.timestamp}"
+        )
         assert record.task_name == ""
 
     @pytest.mark.asyncio
@@ -302,6 +330,10 @@ class TestImplementTaskStructuredLogging:
 
         record = started_records[0]
         assert record.levelno == logging.INFO
+        assert hasattr(record, "timestamp"), "Expected timestamp field in log record"
+        assert ISO_8601_PATTERN.match(record.timestamp), (
+            f"Invalid ISO 8601 timestamp: {record.timestamp}"
+        )
         # Verify special characters are NOT escaped - passed through as-is
         assert record.task_name == special_summary
         assert "<script>" in record.task_name
