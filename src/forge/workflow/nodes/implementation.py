@@ -152,6 +152,18 @@ async def implement_task(state: WorkflowState) -> WorkflowState:
         if result.success:
             logger.info(f"Container completed successfully for {current_task}")
 
+            # Emit structured completion log for observability
+            logger.info(
+                f"Implementation completed for task {current_task}",
+                extra={
+                    "event": "implementation_completed",
+                    "task_name": task_summary,
+                    "feature_id": ticket_key,
+                    "task_id": current_task,
+                    "success": True,
+                },
+            )
+
             # Track implemented tasks
             implemented = state.get("implemented_tasks", [])
             implemented.append(current_task)
