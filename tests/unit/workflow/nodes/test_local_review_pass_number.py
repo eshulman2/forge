@@ -9,6 +9,11 @@ from forge.workflow.feature.state import create_initial_feature_state
 from forge.workflow.nodes.implementation import implement_task
 from forge.workflow.nodes.local_reviewer import local_review_changes
 
+pytestmark = pytest.mark.usefixtures(
+    "mock_implementation_workspace_recovery",
+    "mock_review_workspace_recovery",
+)
+
 
 def create_mock_jira_client():
     """Create a mock JiraClient with required methods."""

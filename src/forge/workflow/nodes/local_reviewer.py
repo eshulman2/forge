@@ -9,16 +9,21 @@ from forge.models.workflow import TicketType
 from forge.prompts import load_prompt
 from forge.sandbox import ContainerRunner
 from forge.workflow.feature.state import FeatureState as WorkflowState
+from forge.workflow.nodes.git_persistence import (
+    PushPersistenceError,
+    build_persistence_error_state,
+    push_to_fork_with_retry,
+)
 from forge.workflow.nodes.review_utils import (
     next_review_attempt,
     parse_review_verdict,
     review_attempts_exhausted,
     run_review_container,
 )
+from forge.workflow.nodes.workspace_setup import prepare_workspace
 from forge.workflow.utils import update_state_timestamp
 from forge.workflow.utils.jira_status import post_status_comment
 from forge.workspace.git_ops import GitOperations
-from forge.workspace.manager import Workspace
 
 logger = logging.getLogger(__name__)
 
@@ -96,25 +101,58 @@ async def local_review_changes(state: WorkflowState) -> WorkflowState:
         Updated state routing to create_pr or implement_bug_fix.
     """
     ticket_key = state["ticket_key"]
-    workspace_path = state.get("workspace_path")
     ticket_type = state.get("ticket_type")
+    recorded_workspace = state.get("workspace_path")
+    local_workspace_survived = bool(recorded_workspace and Path(recorded_workspace).exists())
 
-    if not workspace_path:
-        logger.info(f"No workspace for local review on {ticket_key}, skipping")
-        return update_state_timestamp({**state, "current_node": "create_pr"})
+    try:
+        workspace_path, git = prepare_workspace(state)
+        state = {**state, "workspace_path": workspace_path}
+    except Exception as exc:
+        logger.error("Unable to prepare local-review workspace for %s: %s", ticket_key, exc)
+        return update_state_timestamp(
+            {**state, "current_node": "create_pr", "last_error": str(exc)}
+        )
+
+    same_workspace_survived = local_workspace_survived and workspace_path == recorded_workspace
+    if state.get("review_push_pending") and same_workspace_survived:
+        try:
+            await push_to_fork_with_retry(git)
+        except PushPersistenceError as exc:
+            return _review_persistence_error_state(state, exc)
+        updates = state.get("review_push_pending_updates", {})
+        return update_state_timestamp(
+            {
+                **state,
+                **updates,
+                "review_push_pending": False,
+                "review_push_pending_updates": {},
+                "persistence_retry_count": 0,
+            }
+        )
+    if state.get("review_push_pending"):
+        logger.warning(
+            "Pending review push for %s cannot be recovered on this worker; rerunning review",
+            ticket_key,
+        )
+        state = {
+            **state,
+            "review_push_pending": False,
+            "review_push_pending_updates": {},
+            "last_error": None,
+        }
 
     if ticket_type == TicketType.BUG:
-        return await _run_bug_review(state)
+        return await _run_bug_review(state, git)
     else:
-        return await _run_feature_review(state)
+        return await _run_feature_review(state, git)
 
 
-async def _run_bug_review(state: WorkflowState) -> WorkflowState:
+async def _run_bug_review(state: WorkflowState, git: GitOperations) -> WorkflowState:
     """Run qualitative local review for bug tickets."""
     ticket_key = state["ticket_key"]
     workspace_path = state["workspace_path"]
     current_repo = state.get("current_repo", "")
-    branch_name = state.get("context", {}).get("branch_name", "")
     qualitative_retry_count = state.get("qualitative_retry_count", 0)
 
     rca_content = state.get("rca_content") or ""
@@ -143,15 +181,6 @@ async def _run_bug_review(state: WorkflowState) -> WorkflowState:
             repo_name=current_repo,
         )
 
-        git = GitOperations(
-            Workspace(
-                path=Path(workspace_path),
-                repo_name=current_repo,
-                branch_name=branch_name,
-                ticket_key=ticket_key,
-            )
-        )
-
         if git.has_uncommitted_changes():
             git.stage_all()
             git.commit(f"[{ticket_key}] fix: address review feedback")
@@ -165,15 +194,16 @@ async def _run_bug_review(state: WorkflowState) -> WorkflowState:
 
         if verdict == "adequate":
             logger.info(f"Bug qualitative review passed for {ticket_key}")
-            return update_state_timestamp(
+            return await _persist_review_result(
+                state,
+                git,
                 {
-                    **state,
                     "local_review_verdict": verdict,
                     "qualitative_feedback": feedback or None,
                     "qualitative_retry_count": qualitative_retry_count,
                     "current_node": "create_pr",
                     "last_error": None,
-                }
+                },
             )
 
         # Non-adequate verdict
@@ -182,16 +212,17 @@ async def _run_bug_review(state: WorkflowState) -> WorkflowState:
                 f"Qualitative review cap ({_QUALITATIVE_CAP}) reached for {ticket_key}, "
                 f"proceeding with warning"
             )
-            return update_state_timestamp(
+            return await _persist_review_result(
+                state,
+                git,
                 {
-                    **state,
                     "local_review_verdict": verdict,
                     "qualitative_feedback": feedback or None,
                     "qualitative_retry_count": new_retry_count,
                     "qualitative_review_failed": True,
                     "current_node": "create_pr",
                     "last_error": None,
-                }
+                },
             )
 
         logger.info(
@@ -199,9 +230,10 @@ async def _run_bug_review(state: WorkflowState) -> WorkflowState:
             f"retry {new_retry_count}/{_QUALITATIVE_CAP}"
         )
         linked_task_keys = state.get("linked_task_keys") or state.get("task_keys") or []
-        return update_state_timestamp(
+        return await _persist_review_result(
+            state,
+            git,
             {
-                **state,
                 "local_review_verdict": verdict,
                 "qualitative_feedback": feedback or None,
                 "qualitative_retry_count": new_retry_count,
@@ -210,7 +242,7 @@ async def _run_bug_review(state: WorkflowState) -> WorkflowState:
                 # Reset so implement_task re-runs the container instead of seeing "all done"
                 "implemented_tasks": [],
                 "current_task_key": linked_task_keys[0] if linked_task_keys else None,
-            }
+            },
         )
 
     except Exception as e:
@@ -225,13 +257,12 @@ async def _run_bug_review(state: WorkflowState) -> WorkflowState:
         )
 
 
-async def _run_feature_review(state: WorkflowState) -> WorkflowState:
+async def _run_feature_review(state: WorkflowState, git: GitOperations) -> WorkflowState:
     """Run mechanical local review for non-bug tickets (existing behavior)."""
     ticket_key = state["ticket_key"]
     workspace_path = state["workspace_path"]
     review_attempts = state.get("local_review_attempts", 0)
     current_repo = state.get("current_repo", "")
-    branch_name = state.get("context", {}).get("branch_name", "")
     raw_pass_number = state.get("local_review_pass_number", 1)
     validated_pass = _validate_pass_number(raw_pass_number)
 
@@ -306,15 +337,6 @@ async def _run_feature_review(state: WorkflowState) -> WorkflowState:
             repo_name=current_repo,
         )
 
-        git = GitOperations(
-            Workspace(
-                path=Path(workspace_path),
-                repo_name=current_repo,
-                branch_name=branch_name,
-                ticket_key=ticket_key,
-            )
-        )
-
         if git.has_uncommitted_changes():
             git.stage_all()
             git.commit(f"[{ticket_key}] fix: address breaking issues found in local review")
@@ -327,13 +349,15 @@ async def _run_feature_review(state: WorkflowState) -> WorkflowState:
                 f"Breaking issues remain after review attempt {review_attempts + 1}, retrying"
             )
             next_pass = (validated_pass or 1) + 1
-            return update_state_timestamp(
+            return await _persist_review_result(
+                state,
+                git,
                 {
-                    **state,
                     "local_review_attempts": review_attempts + 1,
                     "local_review_pass_number": next_pass,
                     "current_node": "local_review",
-                }
+                    "last_error": None,
+                },
             )
 
         if has_unfixed:
@@ -344,13 +368,14 @@ async def _run_feature_review(state: WorkflowState) -> WorkflowState:
         else:
             logger.info(f"Local review passed for {ticket_key}")
 
-        return update_state_timestamp(
+        return await _persist_review_result(
+            state,
+            git,
             {
-                **state,
                 "local_review_attempts": 0,
                 "current_node": "create_pr",
                 "last_error": None,
-            }
+            },
         )
 
     except Exception as e:
@@ -369,3 +394,43 @@ def _has_unfixed_breaking_issues(output: str) -> bool:
     """Check if the review output indicates unfixed breaking issues remain."""
     lower = output.lower()
     return "unfixed" in lower and "breaking" in lower
+
+
+async def _persist_review_result(
+    state: WorkflowState,
+    git: GitOperations,
+    updates: dict,
+) -> WorkflowState:
+    """Persist review changes before applying the review's routing decision."""
+    try:
+        await push_to_fork_with_retry(git)
+    except PushPersistenceError as exc:
+        pending_state = {
+            **state,
+            "review_push_pending": True,
+            "review_push_pending_updates": updates,
+        }
+        return _review_persistence_error_state(pending_state, exc)
+    return update_state_timestamp(
+        {
+            **state,
+            **updates,
+            "review_push_pending": False,
+            "review_push_pending_updates": {},
+            "persistence_retry_count": 0,
+        }
+    )
+
+
+def _review_persistence_error_state(
+    state: WorkflowState,
+    error: PushPersistenceError,
+) -> WorkflowState:
+    return update_state_timestamp(
+        build_persistence_error_state(
+            state,
+            error,
+            retry_node="local_review",
+            escalation_node="escalate_blocked",
+        )
+    )

@@ -19,10 +19,15 @@ from forge.integrations.jira.client import JiraClient
 from forge.models.workflow import TicketType
 from forge.sandbox import ContainerRunner
 from forge.workflow.feature.state import FeatureState as WorkflowState
+from forge.workflow.nodes.git_persistence import (
+    PushPersistenceError,
+    build_persistence_error_state,
+    push_to_fork_with_retry,
+)
+from forge.workflow.nodes.workspace_setup import prepare_workspace
 from forge.workflow.utils import update_state_timestamp
 from forge.workflow.utils.jira_status import post_status_comment
 from forge.workspace.git_ops import GitOperations
-from forge.workspace.manager import Workspace
 
 logger = logging.getLogger(__name__)
 
@@ -48,13 +53,57 @@ async def implement_task(state: WorkflowState) -> WorkflowState:
     current_task = state.get("current_task_key")
     task_keys = state.get("task_keys", [])
     implementation_node = _implementation_node_name(state)
+    recorded_workspace = state.get("workspace_path")
+    local_workspace_survived = bool(recorded_workspace and Path(recorded_workspace).exists())
 
-    if not workspace_path:
-        logger.error(f"No workspace for implementation on {ticket_key}")
+    try:
+        git: GitOperations
+        workspace_path, git = prepare_workspace(state)
+        state = {**state, "workspace_path": workspace_path}
+    except Exception as exc:
+        logger.error("Unable to prepare implementation workspace for %s: %s", ticket_key, exc)
         return {
             **state,
-            "last_error": "Workspace not set up",
+            "last_error": str(exc),
             "current_node": implementation_node,
+        }
+
+    same_workspace_survived = local_workspace_survived and workspace_path == recorded_workspace
+    if state.get("implementation_push_pending") and same_workspace_survived:
+        try:
+            await push_to_fork_with_retry(git)
+        except PushPersistenceError as exc:
+            return update_state_timestamp(
+                build_persistence_error_state(state, exc, retry_node=implementation_node)
+            )
+
+        pending_task = state.get("implementation_push_pending_task")
+        implemented = list(state.get("implemented_tasks", []))
+        if pending_task and pending_task not in implemented:
+            implemented.append(pending_task)
+        return update_state_timestamp(
+            {
+                **state,
+                "current_task_key": None,
+                "implemented_tasks": implemented,
+                "current_node": implementation_node,
+                "last_error": None,
+                "implementation_push_pending": False,
+                "implementation_push_pending_task": None,
+                "persistence_retry_count": 0,
+            }
+        )
+    if state.get("implementation_push_pending"):
+        logger.warning(
+            "Pending implementation push for %s cannot be recovered on this worker; "
+            "rerunning implementation",
+            ticket_key,
+        )
+        state = {
+            **state,
+            "implementation_push_pending": False,
+            "implementation_push_pending_task": None,
+            "last_error": None,
         }
 
     # Get next task to implement if not set
@@ -72,20 +121,10 @@ async def implement_task(state: WorkflowState) -> WorkflowState:
     if not current_task:
         logger.info(f"All tasks implemented for {ticket_key}")
 
-        # Fallback: commit any files the container agent left uncommitted.
-        # The container is responsible for committing, but this catches edge
-        # cases where it exited before the final commit step.
-        if workspace_path:
-            branch_name = state.get("context", {}).get("branch_name", "")
-            current_repo = state.get("current_repo", "")
-            git = GitOperations(
-                Workspace(
-                    path=Path(workspace_path),
-                    repo_name=current_repo,
-                    branch_name=branch_name,
-                    ticket_key=ticket_key,
-                )
-            )
+        try:
+            # Fallback: commit any files the container agent left uncommitted.
+            # The container is responsible for committing, but this catches edge
+            # cases where it exited before the final commit step.
             if git.has_uncommitted_changes():
                 logger.warning(
                     f"Uncommitted changes found after all tasks for {ticket_key} — "
@@ -93,6 +132,25 @@ async def implement_task(state: WorkflowState) -> WorkflowState:
                 )
                 git.stage_all()
                 git.commit(f"[{ticket_key}] chore: commit uncommitted changes after implementation")
+            await push_to_fork_with_retry(git)
+        except PushPersistenceError as exc:
+            return update_state_timestamp(
+                build_persistence_error_state(state, exc, retry_node=implementation_node)
+            )
+        except Exception as exc:
+            logger.error(
+                "Unable to persist completed implementation for %s: %s",
+                ticket_key,
+                exc,
+            )
+            return update_state_timestamp(
+                {
+                    **state,
+                    "last_error": str(exc),
+                    "current_node": implementation_node,
+                    "retry_count": state.get("retry_count", 0) + 1,
+                }
+            )
 
         return update_state_timestamp(
             {
@@ -155,6 +213,29 @@ async def implement_task(state: WorkflowState) -> WorkflowState:
         if result.success:
             logger.info(f"Container completed successfully for {current_task}")
 
+            # Persist each task commit before checkpointing. A subsequent task
+            # or local review may resume on a worker with a different filesystem.
+            try:
+                await push_to_fork_with_retry(git)
+            except PushPersistenceError as exc:
+                pending_state = {
+                    **state,
+                    "implementation_push_pending": True,
+                    "implementation_push_pending_task": current_task,
+                }
+                return update_state_timestamp(
+                    build_persistence_error_state(
+                        pending_state,
+                        exc,
+                        retry_node=implementation_node,
+                    )
+                )
+
+            # Persist workflow bookkeeping immediately after the durable push.
+            implemented = list(state.get("implemented_tasks", []))
+            if current_task not in implemented:
+                implemented.append(current_task)
+
             # Post status comment at task implementation completion
             await post_status_comment(
                 jira,
@@ -163,9 +244,6 @@ async def implement_task(state: WorkflowState) -> WorkflowState:
             )
 
             # Track implemented tasks
-            implemented = state.get("implemented_tasks", [])
-            implemented.append(current_task)
-
             return update_state_timestamp(
                 {
                     **state,

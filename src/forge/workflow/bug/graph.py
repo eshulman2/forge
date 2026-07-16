@@ -295,6 +295,12 @@ def _route_after_local_review(state: BugState) -> str:
 
     verdict = state.get("local_review_verdict")
     retry_count = state.get("qualitative_retry_count", 0)
+    current_node = state.get("current_node", "update_documentation")
+
+    if current_node == "escalate_blocked":
+        return "escalate_blocked"
+    if state.get("last_error"):
+        return current_node
 
     if verdict == "adequate" or retry_count >= _QUALITATIVE_CAP:
         return "update_documentation"
@@ -304,7 +310,7 @@ def _route_after_local_review(state: BugState) -> str:
     # to prevent infinite loops if current_node is "local_review".
     if state.get("local_review_attempts", 0) >= MAX_REVIEW_ATTEMPTS:
         return "update_documentation"
-    return state.get("current_node", "update_documentation")
+    return current_node
 
 
 def _route_after_workspace_setup(
@@ -332,6 +338,10 @@ def _route_after_implementation(
     retry_count = state.get("retry_count", 0)
     max_retries = 3
     last_error = state.get("last_error")
+
+    if last_error and state.get("persistence_retry_count", 0) >= 3:
+        logger.error(f"Git persistence retry limit exceeded: {last_error}")
+        return "escalate_blocked"
 
     if last_error:
         if retry_count >= max_retries:
@@ -623,6 +633,7 @@ def build_bug_graph() -> StateGraph:
             "update_documentation": "update_documentation",
             "create_pr": "create_pr",
             "implement_bug_fix": "implement_bug_fix",
+            "escalate_blocked": "escalate_blocked",
         },
     )
     graph.add_edge("update_documentation", "create_pr")

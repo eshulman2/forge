@@ -1,6 +1,5 @@
 """Tests for FeatureWorkflow."""
 
-
 from langgraph.graph import END
 
 from forge.models.workflow import TicketType
@@ -12,6 +11,7 @@ from forge.workflow.feature.graph import (
     _route_after_single_task_update,
     _route_after_spec_regeneration,
     _route_after_task_regeneration,
+    _route_implementation,
     build_feature_graph,
     route_by_ticket_type,
 )
@@ -19,6 +19,16 @@ from forge.workflow.feature.graph import (
 
 class TestFeatureWorkflow:
     """Tests for FeatureWorkflow class."""
+
+    def test_implementation_error_never_falls_through_to_review(self):
+        state = {
+            "last_error": "push failed",
+            "retry_count": 1,
+            "current_repo": "owner/repo",
+            "tasks_by_repo": {"owner/repo": ["TASK-1"]},
+            "implemented_tasks": ["TASK-1"],
+        }
+        assert _route_implementation(state) == "implement_task"
 
     def test_workflow_has_name(self):
         """FeatureWorkflow has name attribute."""

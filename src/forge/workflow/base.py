@@ -58,6 +58,11 @@ class PRIntegrationState(TypedDict, total=False):
     merge_conflicts: list[str]
     local_review_attempts: int
     local_review_pass_number: int
+    implementation_push_pending: bool
+    implementation_push_pending_task: str | None
+    persistence_retry_count: int
+    review_push_pending: bool
+    review_push_pending_updates: dict[str, Any]
 
 
 class CIIntegrationState(TypedDict, total=False):

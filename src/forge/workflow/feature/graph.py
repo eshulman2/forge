@@ -160,6 +160,7 @@ def _route_after_generation(state: FeatureState) -> str:
         "prd_approval_gate" on success, END on failure.
     """
     last_error = state.get("last_error")
+
     prd_content = state.get("prd_content", "")
 
     if last_error and not prd_content:
@@ -313,9 +314,16 @@ def _route_implementation(
     max_retries = 3  # Max retries per task
     last_error = state.get("last_error")
 
+    if last_error and state.get("persistence_retry_count", 0) >= 3:
+        logger.error(f"Git persistence retry limit exceeded: {last_error}")
+        return "escalate_blocked"
+
     if last_error and retry_count >= max_retries:
         logger.error(f"Implementation retry limit ({max_retries}) exceeded: {last_error}")
         return "escalate_blocked"
+
+    if last_error:
+        return "implement_task"
 
     current_repo = state.get("current_repo", "")
     repo_tasks = state.get("tasks_by_repo", {}).get(current_repo, [])
@@ -698,7 +706,11 @@ def build_feature_graph() -> StateGraph:
     graph.add_conditional_edges(
         "local_review",
         lambda s: s.get("current_node", "create_pr"),
-        {"local_review": "local_review", "create_pr": "update_documentation"},
+        {
+            "local_review": "local_review",
+            "create_pr": "update_documentation",
+            "escalate_blocked": "escalate_blocked",
+        },
     )
     graph.add_edge("update_documentation", "create_pr")
     graph.add_conditional_edges(

@@ -129,6 +129,16 @@ def _route_after_answer(state: TaskTakeoverState) -> str:
     return "task_plan_approval_gate"
 
 
+def _route_after_execution(state: TaskTakeoverState) -> str:
+    """Never review an implementation whose branch was not persisted."""
+    last_error = state.get("last_error")
+    if not last_error:
+        return "run_qualitative_review"
+    if state.get("persistence_retry_count", 0) >= 3 or state.get("retry_count", 0) >= 3:
+        return "escalate_blocked"
+    return "execute_task_changes"
+
+
 def _route_after_qualitative_review(state: TaskTakeoverState) -> str:
     """Route after run_qualitative_review considering qualitative verdict and retry count.
 
@@ -335,7 +345,15 @@ def build_task_takeover_graph() -> StateGraph[TaskTakeoverState, Any, Any]:
 
     # Execution flow
     graph.add_edge("setup_workspace", "execute_task_changes")
-    graph.add_edge("execute_task_changes", "run_qualitative_review")
+    graph.add_conditional_edges(
+        "execute_task_changes",
+        _route_after_execution,
+        {
+            "execute_task_changes": "execute_task_changes",
+            "run_qualitative_review": "run_qualitative_review",
+            "escalate_blocked": "escalate_blocked",
+        },
+    )
     graph.add_conditional_edges(
         "run_qualitative_review",
         _route_after_qualitative_review,

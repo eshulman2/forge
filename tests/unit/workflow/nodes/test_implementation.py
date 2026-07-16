@@ -6,6 +6,8 @@ import pytest
 
 from forge.models.workflow import TicketType
 
+pytestmark = pytest.mark.usefixtures("mock_implementation_workspace_recovery")
+
 
 def _make_state(
     ticket_key="BUG-123",
@@ -56,7 +58,6 @@ def _make_successful_runner():
 
 
 class TestImplementTaskStartedComment:
-
     @pytest.mark.asyncio
     async def test_posts_comment_on_task_ticket_before_container(self):
         """A comment is posted on the task ticket (not parent) when implementation starts."""
@@ -184,7 +185,6 @@ class TestImplementTaskStartedComment:
 
 
 class TestImplementationNodeRouting:
-
     @pytest.mark.asyncio
     async def test_feature_missing_workspace_uses_feature_implementation_node(self):
         """Feature implementation failures must resume at implement_task."""
@@ -241,6 +241,106 @@ class TestImplementationNodeRouting:
         assert result["current_node"] == "implement_task"
         assert result["last_error"] == "container failed"
         assert result["retry_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_successful_implementation_is_pushed_before_checkpoint(self) -> None:
+        """A different worker can recover the implementation commit from the fork."""
+        from forge.workflow.nodes.implementation import implement_task
+
+        state = _make_state()
+        mock_git = MagicMock()
+        mock_jira = _make_mock_jira()
+        runner = _make_successful_runner()
+
+        with (
+            patch(
+                "forge.workflow.nodes.implementation.prepare_workspace",
+                return_value=(state["workspace_path"], mock_git),
+            ),
+            patch("forge.workflow.nodes.implementation.JiraClient", return_value=mock_jira),
+            patch("forge.workflow.nodes.implementation.ContainerRunner", return_value=runner),
+            patch("forge.workflow.nodes.implementation.get_settings"),
+        ):
+            result = await implement_task(state)
+
+        assert result["last_error"] is None
+        mock_git.push_to_fork.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_final_push_failure_is_recorded_for_retry(self) -> None:
+        """The all-tasks-done path must not leak a push exception from the graph node."""
+        from forge.workflow.nodes.implementation import implement_task
+
+        state = _make_state(current_task_key=None)
+        state["task_keys"] = []
+        mock_git = MagicMock()
+        mock_git.has_uncommitted_changes.return_value = False
+        mock_git.push_to_fork.side_effect = RuntimeError("fork unavailable")
+
+        with patch(
+            "forge.workflow.nodes.implementation.prepare_workspace",
+            return_value=(state["workspace_path"], mock_git),
+        ):
+            result = await implement_task(state)
+
+        assert result["current_node"] == "implement_bug_fix"
+        assert result["last_error"] == "fork unavailable"
+        assert result["retry_count"] == 0
+        assert result["persistence_retry_count"] == 3
+
+    @pytest.mark.asyncio
+    async def test_pending_push_retries_without_rerunning_container(self, tmp_path) -> None:
+        """A surviving workspace resumes at persistence, not implementation."""
+        from forge.workflow.nodes.implementation import implement_task
+
+        state = _make_state(workspace_path=str(tmp_path))
+        state["implementation_push_pending"] = True
+        state["implementation_push_pending_task"] = "TASK-456"
+        mock_git = MagicMock()
+
+        with (
+            patch(
+                "forge.workflow.nodes.implementation.prepare_workspace",
+                return_value=(str(tmp_path), mock_git),
+            ),
+            patch("forge.workflow.nodes.implementation.ContainerRunner") as runner,
+        ):
+            result = await implement_task(state)
+
+        runner.assert_not_called()
+        mock_git.push_to_fork.assert_called_once()
+        assert result["implemented_tasks"] == ["TASK-456"]
+        assert result["implementation_push_pending"] is False
+
+    @pytest.mark.asyncio
+    async def test_recreated_workspace_does_not_mark_pending_task_complete(self, tmp_path) -> None:
+        """A replacement clone cannot stand in for the workspace holding the commit."""
+        from forge.workflow.nodes.implementation import implement_task
+
+        old_workspace = tmp_path / "old"
+        old_workspace.mkdir()
+        new_workspace = tmp_path / "new"
+        new_workspace.mkdir()
+        state = _make_state(workspace_path=str(old_workspace))
+        state["implementation_push_pending"] = True
+        state["implementation_push_pending_task"] = "TASK-456"
+        mock_git = MagicMock()
+        mock_jira = _make_mock_jira()
+        runner = _make_successful_runner()
+
+        with (
+            patch(
+                "forge.workflow.nodes.implementation.prepare_workspace",
+                return_value=(str(new_workspace), mock_git),
+            ),
+            patch("forge.workflow.nodes.implementation.JiraClient", return_value=mock_jira),
+            patch("forge.workflow.nodes.implementation.ContainerRunner", return_value=runner),
+            patch("forge.workflow.nodes.implementation.get_settings"),
+        ):
+            result = await implement_task(state)
+
+        runner.run.assert_awaited_once()
+        assert result["implementation_push_pending"] is False
 
     @pytest.mark.asyncio
     async def test_bug_container_failure_keeps_bug_implementation_node(self):

@@ -7,6 +7,11 @@ from typing import cast
 from forge.config import get_settings
 from forge.integrations.jira.client import JiraClient
 from forge.sandbox.runner import ContainerConfig, ContainerRunner
+from forge.workflow.nodes.git_persistence import (
+    PushPersistenceError,
+    build_persistence_error_state,
+    push_to_fork_with_retry,
+)
 from forge.workflow.nodes.workspace_setup import prepare_workspace
 from forge.workflow.task_takeover.state import TaskTakeoverState
 from forge.workflow.utils import update_state_timestamp
@@ -26,6 +31,8 @@ async def execute_task_changes(state: TaskTakeoverState) -> TaskTakeoverState:
     ticket_key = state["ticket_key"]
     current_repo = state.get("current_repo", "")
     current_task = state.get("current_task_key") or ticket_key
+    recorded_workspace = state.get("workspace_path")
+    local_workspace_survived = bool(recorded_workspace and Path(recorded_workspace).exists())
 
     settings = get_settings()
     jira = JiraClient(settings)
@@ -36,6 +43,47 @@ async def execute_task_changes(state: TaskTakeoverState) -> TaskTakeoverState:
         # below so a newly cloned workspace contains the reviewed changes.
         workspace_path, git = prepare_workspace(state)
         state = {**state, "workspace_path": workspace_path}
+
+        same_workspace_survived = local_workspace_survived and workspace_path == recorded_workspace
+        if state.get("implementation_push_pending") and same_workspace_survived:
+            try:
+                await push_to_fork_with_retry(git)
+            except PushPersistenceError as exc:
+                return cast(
+                    TaskTakeoverState,
+                    update_state_timestamp(
+                        build_persistence_error_state(
+                            state,
+                            exc,
+                            retry_node="execute_task_changes",
+                        )
+                    ),
+                )
+            return cast(
+                TaskTakeoverState,
+                update_state_timestamp(
+                    {
+                        **state,
+                        "last_error": None,
+                        "implementation_push_pending": False,
+                        "implementation_push_pending_task": None,
+                        "persistence_retry_count": 0,
+                        "current_node": "execute_task_changes",
+                    }
+                ),
+            )
+        if state.get("implementation_push_pending"):
+            logger.warning(
+                "Pending task-takeover push for %s cannot be recovered on this worker; "
+                "rerunning implementation",
+                ticket_key,
+            )
+            state = {
+                **state,
+                "implementation_push_pending": False,
+                "implementation_push_pending_task": None,
+                "last_error": None,
+            }
 
         # Get details from Jira for task implementation context
         task_issue = await jira.get_issue(current_task)
@@ -90,33 +138,57 @@ async def execute_task_changes(state: TaskTakeoverState) -> TaskTakeoverState:
             committed = git.commit(commit_message)
 
         current_sha = git.get_current_sha()
+        execution_state = {
+            **state,
+            "task_execution_results": {
+                "success": result.success,
+                "exit_code": result.exit_code,
+                "error_message": result.error_message,
+            },
+            "task_execution_logs": {
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+            },
+            "commit_info": {
+                "sha": current_sha,
+                "message": commit_message,
+                "committed": committed,
+            },
+            "current_node": "execute_task_changes",
+            "last_error": None if result.success else result.error_message,
+            "retry_count": 0 if result.success else state.get("retry_count", 0) + 1,
+        }
+
         # Review may be consumed by another worker with a different local
-        # filesystem.  Persist the exact commit before checkpointing this node.
-        git.push_to_fork()
+        # filesystem. Persist the exact commit before checkpointing this node.
+        try:
+            await push_to_fork_with_retry(git)
+        except PushPersistenceError as exc:
+            pending_state = {
+                **execution_state,
+                "implementation_push_pending": True,
+                "implementation_push_pending_task": current_task,
+            }
+            return cast(
+                TaskTakeoverState,
+                update_state_timestamp(
+                    build_persistence_error_state(
+                        pending_state,
+                        exc,
+                        retry_node="execute_task_changes",
+                    )
+                ),
+            )
 
         # Store results, logs, and commit info in state
         return cast(
             TaskTakeoverState,
             update_state_timestamp(
                 {
-                    **state,
-                    "task_execution_results": {
-                        "success": result.success,
-                        "exit_code": result.exit_code,
-                        "error_message": result.error_message,
-                    },
-                    "task_execution_logs": {
-                        "stdout": result.stdout,
-                        "stderr": result.stderr,
-                    },
-                    "commit_info": {
-                        "sha": current_sha,
-                        "message": commit_message,
-                        "committed": committed,
-                    },
-                    "current_node": "execute_task_changes",
-                    "last_error": None if result.success else result.error_message,
-                    "retry_count": 0 if result.success else state.get("retry_count", 0) + 1,
+                    **execution_state,
+                    "implementation_push_pending": False,
+                    "implementation_push_pending_task": None,
+                    "persistence_retry_count": 0,
                 }
             ),
         )

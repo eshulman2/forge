@@ -10,6 +10,7 @@ from forge.models.workflow import ForgeLabel, TicketType
 from forge.workflow.gates.task_plan_approval import route_task_plan_approval
 from forge.workflow.task_takeover.graph import (
     _route_after_answer,
+    _route_after_execution,
     _route_after_generate_plan,
     _route_after_triage_check,
     _route_ci_evaluation,
@@ -155,6 +156,19 @@ class TestPathTransitions:
             retry_count=3,
         )
         assert _route_after_generate_plan(state) == "escalate_blocked"
+
+
+class TestExecutionRouting:
+    def test_success_routes_to_review(self) -> None:
+        assert _route_after_execution(make_task_state(last_error=None)) == "run_qualitative_review"
+
+    def test_push_failure_retries_execution_node(self) -> None:
+        state = make_task_state(last_error="network timeout", persistence_retry_count=1)
+        assert _route_after_execution(state) == "execute_task_changes"
+
+    def test_persistence_cap_blocks_without_review(self) -> None:
+        state = make_task_state(last_error="authentication failed", persistence_retry_count=3)
+        assert _route_after_execution(state) == "escalate_blocked"
 
 
 class TestQualitativeReviewRouting:

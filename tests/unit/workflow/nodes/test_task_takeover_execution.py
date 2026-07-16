@@ -202,3 +202,91 @@ class TestTaskTakeoverExecutionNode:
         assert result_state["last_error"] == "Jira Connection Error"
         assert result_state["current_node"] == "execute_task_changes"
         assert result_state["retry_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_push_failure_does_not_consume_implementation_retry(self) -> None:
+        state = _make_state()
+        mock_jira = _make_mock_jira()
+        mock_runner = _make_mock_runner()
+        mock_git = _make_mock_git()
+        mock_git.push_to_fork.side_effect = RuntimeError("authentication failed")
+
+        with (
+            patch(
+                "forge.workflow.nodes.task_takeover_execution.JiraClient",
+                return_value=mock_jira,
+            ),
+            patch(
+                "forge.workflow.nodes.task_takeover_execution.ContainerRunner",
+                return_value=mock_runner,
+            ),
+            patch(
+                "forge.workflow.nodes.task_takeover_execution.prepare_workspace",
+                return_value=("/tmp/ws", mock_git),
+            ),
+            patch("forge.workflow.nodes.task_takeover_execution.get_settings"),
+        ):
+            result = await execute_task_changes(state)
+
+        assert result["implementation_push_pending"] is True
+        assert result["retry_count"] == 0
+        assert result["persistence_retry_count"] == 3
+
+    @pytest.mark.asyncio
+    async def test_pending_push_does_not_rerun_container(self, tmp_path) -> None:
+        state = _make_state(workspace_path=str(tmp_path))
+        state["implementation_push_pending"] = True
+        state["implementation_push_pending_task"] = "TASK-123"
+        mock_git = _make_mock_git()
+        mock_jira = _make_mock_jira()
+
+        with (
+            patch(
+                "forge.workflow.nodes.task_takeover_execution.JiraClient",
+                return_value=mock_jira,
+            ),
+            patch(
+                "forge.workflow.nodes.task_takeover_execution.prepare_workspace",
+                return_value=(str(tmp_path), mock_git),
+            ),
+            patch("forge.workflow.nodes.task_takeover_execution.ContainerRunner") as runner,
+        ):
+            result = await execute_task_changes(state)
+
+        runner.assert_not_called()
+        mock_git.push_to_fork.assert_called_once()
+        assert result["implementation_push_pending"] is False
+        assert result["last_error"] is None
+
+    @pytest.mark.asyncio
+    async def test_recreated_workspace_reruns_task_instead_of_marking_push_done(
+        self, tmp_path
+    ) -> None:
+        old_workspace = tmp_path / "old"
+        old_workspace.mkdir()
+        new_workspace = tmp_path / "new"
+        new_workspace.mkdir()
+        state = _make_state(workspace_path=str(old_workspace))
+        state["implementation_push_pending"] = True
+        mock_git = _make_mock_git()
+        mock_jira = _make_mock_jira()
+        runner = _make_mock_runner()
+
+        with (
+            patch(
+                "forge.workflow.nodes.task_takeover_execution.prepare_workspace",
+                return_value=(str(new_workspace), mock_git),
+            ),
+            patch(
+                "forge.workflow.nodes.task_takeover_execution.JiraClient",
+                return_value=mock_jira,
+            ),
+            patch(
+                "forge.workflow.nodes.task_takeover_execution.ContainerRunner",
+                return_value=runner,
+            ),
+        ):
+            result = await execute_task_changes(state)
+
+        runner.run.assert_awaited_once()
+        assert result["implementation_push_pending"] is False

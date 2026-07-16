@@ -1,6 +1,6 @@
 """Unit tests for local_review_changes bug-specific enhancements."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -10,6 +10,8 @@ from forge.workflow.nodes.local_reviewer import (
     local_review_changes,
     route_local_review,
 )
+
+pytestmark = pytest.mark.usefixtures("mock_review_workspace_recovery")
 
 
 @pytest.fixture
@@ -140,7 +142,6 @@ class TestLocalReviewBug:
                 return result
 
         mock_git = _make_mock_git()
-        mock_workspace = MagicMock()
 
         with (
             patch(
@@ -148,7 +149,6 @@ class TestLocalReviewBug:
                 return_value=_CapturingRunner(),
             ),
             patch("forge.workflow.nodes.local_reviewer.GitOperations", return_value=mock_git),
-            patch("forge.workflow.nodes.local_reviewer.Workspace", return_value=mock_workspace),
         ):
             await local_review_changes(base_bug_review_state)
 
@@ -162,17 +162,54 @@ class TestLocalReviewBug:
         """'adequate' verdict → routes to create_pr."""
         runner = _make_mock_runner("verdict: adequate\n\nfeedback: Looks good.")
         mock_git = _make_mock_git()
-        mock_workspace = MagicMock()
 
         with (
             patch("forge.workflow.nodes.local_reviewer.ContainerRunner", return_value=runner),
             patch("forge.workflow.nodes.local_reviewer.GitOperations", return_value=mock_git),
-            patch("forge.workflow.nodes.local_reviewer.Workspace", return_value=mock_workspace),
         ):
             result = await local_review_changes(base_bug_review_state)
 
         assert result["current_node"] == "create_pr"
         assert result["local_review_verdict"] == "adequate"
+        mock_git.push_to_fork.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_transient_push_resumes_without_rerunning_review(
+        self, base_bug_review_state, tmp_path
+    ):
+        """A review verdict is checkpointed while only its push is retried."""
+        base_bug_review_state["workspace_path"] = str(tmp_path)
+        runner = _make_mock_runner("verdict: adequate\nfeedback: Looks good.")
+        mock_git = _make_mock_git()
+        mock_git.push_to_fork.side_effect = [
+            RuntimeError("connection reset"),
+            RuntimeError("connection reset"),
+            RuntimeError("connection reset"),
+            None,
+        ]
+
+        with (
+            patch(
+                "forge.workflow.nodes.local_reviewer.prepare_workspace",
+                return_value=(str(tmp_path), mock_git),
+            ),
+            patch("forge.workflow.nodes.local_reviewer.ContainerRunner", return_value=runner),
+            patch(
+                "forge.workflow.nodes.git_persistence.asyncio.sleep",
+                new=AsyncMock(),
+            ),
+        ):
+            pending = await local_review_changes(base_bug_review_state)
+            assert pending["review_push_pending"] is True
+            assert pending["current_node"] == "local_review"
+
+            with patch("forge.workflow.nodes.local_reviewer.ContainerRunner") as rerun:
+                completed = await local_review_changes(pending)
+
+        rerun.assert_not_called()
+        assert completed["review_push_pending"] is False
+        assert completed["current_node"] == "create_pr"
+        assert completed["local_review_verdict"] == "adequate"
 
     @pytest.mark.asyncio
     async def test_tests_incomplete_increments_retry(self, base_bug_review_state):
@@ -181,12 +218,10 @@ class TestLocalReviewBug:
             "verdict: tests_incomplete\n\nfeedback: Tests do not fail without fix."
         )
         mock_git = _make_mock_git()
-        mock_workspace = MagicMock()
 
         with (
             patch("forge.workflow.nodes.local_reviewer.ContainerRunner", return_value=runner),
             patch("forge.workflow.nodes.local_reviewer.GitOperations", return_value=mock_git),
-            patch("forge.workflow.nodes.local_reviewer.Workspace", return_value=mock_workspace),
         ):
             result = await local_review_changes(base_bug_review_state)
 
@@ -200,12 +235,10 @@ class TestLocalReviewBug:
         """'symptom_only' verdict → qualitative_retry_count incremented, routes to implement_bug_fix."""
         runner = _make_mock_runner("verdict: symptom_only\n\nfeedback: Root cause not addressed.")
         mock_git = _make_mock_git()
-        mock_workspace = MagicMock()
 
         with (
             patch("forge.workflow.nodes.local_reviewer.ContainerRunner", return_value=runner),
             patch("forge.workflow.nodes.local_reviewer.GitOperations", return_value=mock_git),
-            patch("forge.workflow.nodes.local_reviewer.Workspace", return_value=mock_workspace),
         ):
             result = await local_review_changes(base_bug_review_state)
 
@@ -219,12 +252,10 @@ class TestLocalReviewBug:
         base_bug_review_state["task_keys"] = ["TASK-789"]
         runner = _make_mock_runner("verdict: tests_incomplete\n\nfeedback: Missing tests.")
         mock_git = _make_mock_git()
-        mock_workspace = MagicMock()
 
         with (
             patch("forge.workflow.nodes.local_reviewer.ContainerRunner", return_value=runner),
             patch("forge.workflow.nodes.local_reviewer.GitOperations", return_value=mock_git),
-            patch("forge.workflow.nodes.local_reviewer.Workspace", return_value=mock_workspace),
         ):
             result = await local_review_changes(base_bug_review_state)
 
@@ -236,12 +267,10 @@ class TestLocalReviewBug:
         base_bug_review_state["qualitative_retry_count"] = 1  # Already 1, will become 2 → cap
         runner = _make_mock_runner("verdict: tests_incomplete\n\nfeedback: Still missing tests.")
         mock_git = _make_mock_git()
-        mock_workspace = MagicMock()
 
         with (
             patch("forge.workflow.nodes.local_reviewer.ContainerRunner", return_value=runner),
             patch("forge.workflow.nodes.local_reviewer.GitOperations", return_value=mock_git),
-            patch("forge.workflow.nodes.local_reviewer.Workspace", return_value=mock_workspace),
         ):
             result = await local_review_changes(base_bug_review_state)
 
@@ -273,14 +302,11 @@ class TestBugReviewExceptionHandling:
             async def run(self, **_kwargs):
                 raise RuntimeError("Container crashed")
 
-        mock_workspace = MagicMock()
-
         with (
             patch(
                 "forge.workflow.nodes.local_reviewer.ContainerRunner", return_value=_FailingRunner()
             ),
             patch("forge.workflow.nodes.local_reviewer.GitOperations", return_value=MagicMock()),
-            patch("forge.workflow.nodes.local_reviewer.Workspace", return_value=mock_workspace),
         ):
             result = await local_review_changes(base_bug_review_state)
 
@@ -298,14 +324,11 @@ class TestBugReviewExceptionHandling:
             async def run(self, **_kwargs):
                 raise RuntimeError("OOM")
 
-        mock_workspace = MagicMock()
-
         with (
             patch(
                 "forge.workflow.nodes.local_reviewer.ContainerRunner", return_value=_FailingRunner()
             ),
             patch("forge.workflow.nodes.local_reviewer.GitOperations", return_value=MagicMock()),
-            patch("forge.workflow.nodes.local_reviewer.Workspace", return_value=mock_workspace),
         ):
             result = await local_review_changes(base_bug_review_state)
 
@@ -332,7 +355,6 @@ class TestLocalReviewFeature:
                 return result
 
         mock_git = _make_mock_git()
-        mock_workspace = MagicMock()
 
         with (
             patch(
@@ -340,24 +362,22 @@ class TestLocalReviewFeature:
                 return_value=_CapturingRunner(),
             ),
             patch("forge.workflow.nodes.local_reviewer.GitOperations", return_value=mock_git),
-            patch("forge.workflow.nodes.local_reviewer.Workspace", return_value=mock_workspace),
         ):
             result = await local_review_changes(base_feature_review_state)
 
         assert result["current_node"] == "create_pr"
         assert result.get("local_review_verdict") is None
+        mock_git.push_to_fork.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_feature_no_qualitative_fields_set(self, base_feature_review_state):
         """Feature ticket → qualitative_retry_count and verdict not modified."""
         runner = _make_mock_runner("verdict: adequate\n\nfeedback: Good.")
         mock_git = _make_mock_git()
-        mock_workspace = MagicMock()
 
         with (
             patch("forge.workflow.nodes.local_reviewer.ContainerRunner", return_value=runner),
             patch("forge.workflow.nodes.local_reviewer.GitOperations", return_value=mock_git),
-            patch("forge.workflow.nodes.local_reviewer.Workspace", return_value=mock_workspace),
         ):
             result = await local_review_changes(base_feature_review_state)
 

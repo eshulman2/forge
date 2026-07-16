@@ -13,6 +13,8 @@ import pytest
 from forge.workflow.feature.state import create_initial_feature_state
 from forge.workflow.nodes.implementation import implement_task
 
+pytestmark = pytest.mark.usefixtures("mock_implementation_workspace_recovery")
+
 
 def create_mock_jira_client():
     """Create a mock JiraClient with required methods."""
@@ -333,4 +335,3 @@ class TestImplementationStatusInstrumentationMultipleTasks:
         assert (
             mock_post_status2.call_args_list[0][0][2] == "🔨 Forge started implementing [TASK-2]: Task summary"
         )
-

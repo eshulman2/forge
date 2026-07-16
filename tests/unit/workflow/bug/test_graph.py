@@ -39,42 +39,45 @@ def _bug_state(**overrides):
 class TestRouteEntry:
     """route_entry maps current_node values to correct resume targets."""
 
-    @pytest.mark.parametrize("node,expected", [
-        # New nodes
-        ("triage_check", "triage_check"),
-        ("triage_gate", "triage_gate"),
-        ("analyze_bug", "analyze_bug"),
-        ("reflect_rca", "reflect_rca"),
-        ("rca_option_gate", "rca_option_gate"),
-        ("plan_bug_fix", "plan_bug_fix"),
-        ("plan_approval_gate", "plan_approval_gate"),
-        ("regenerate_plan", "regenerate_plan"),
-        ("decompose_plan", "decompose_plan"),
-        ("post_merge_summary", "post_merge_summary"),
-        # Backward compat: old rca_approval_gate value maps to rca_option_gate
-        ("rca_approval_gate", "rca_option_gate"),
-        # regenerate_rca performs cleanup before routing through analyze_bug
-        ("regenerate_rca", "regenerate_rca"),
-        # Preserved existing nodes
-        ("setup_workspace", "setup_workspace"),
-        ("implement_bug_fix", "implement_bug_fix"),
-        ("local_review", "local_review"),
-        ("update_documentation", "update_documentation"),
-        ("create_pr", "create_pr"),
-        ("teardown_workspace", "teardown_workspace"),
-        ("ci_evaluator", "ci_evaluator"),
-        ("attempt_ci_fix", "ci_evaluator"),
-        ("wait_for_ci_gate", "wait_for_ci_gate"),
-        ("ai_review", "human_review_gate"),
-        ("human_review_gate", "human_review_gate"),
-        ("implement_review", "implement_review"),
-        ("review_response_gate", "review_response_gate"),
-        ("escalate_blocked", "escalate_blocked"),
-        ("complete", END),
-        ("complete_tasks", END),
-        ("aggregate_epic_status", END),
-        ("aggregate_feature_status", END),
-    ])
+    @pytest.mark.parametrize(
+        "node,expected",
+        [
+            # New nodes
+            ("triage_check", "triage_check"),
+            ("triage_gate", "triage_gate"),
+            ("analyze_bug", "analyze_bug"),
+            ("reflect_rca", "reflect_rca"),
+            ("rca_option_gate", "rca_option_gate"),
+            ("plan_bug_fix", "plan_bug_fix"),
+            ("plan_approval_gate", "plan_approval_gate"),
+            ("regenerate_plan", "regenerate_plan"),
+            ("decompose_plan", "decompose_plan"),
+            ("post_merge_summary", "post_merge_summary"),
+            # Backward compat: old rca_approval_gate value maps to rca_option_gate
+            ("rca_approval_gate", "rca_option_gate"),
+            # regenerate_rca performs cleanup before routing through analyze_bug
+            ("regenerate_rca", "regenerate_rca"),
+            # Preserved existing nodes
+            ("setup_workspace", "setup_workspace"),
+            ("implement_bug_fix", "implement_bug_fix"),
+            ("local_review", "local_review"),
+            ("update_documentation", "update_documentation"),
+            ("create_pr", "create_pr"),
+            ("teardown_workspace", "teardown_workspace"),
+            ("ci_evaluator", "ci_evaluator"),
+            ("attempt_ci_fix", "ci_evaluator"),
+            ("wait_for_ci_gate", "wait_for_ci_gate"),
+            ("ai_review", "human_review_gate"),
+            ("human_review_gate", "human_review_gate"),
+            ("implement_review", "implement_review"),
+            ("review_response_gate", "review_response_gate"),
+            ("escalate_blocked", "escalate_blocked"),
+            ("complete", END),
+            ("complete_tasks", END),
+            ("aggregate_epic_status", END),
+            ("aggregate_feature_status", END),
+        ],
+    )
     def test_route_entry_mapping(self, node, expected):
         """route_entry maps each current_node to the correct resume target."""
         state = _bug_state(current_node=node)
@@ -263,6 +266,14 @@ class TestPlanRouting:
 class TestLocalReviewRouting:
     """_route_after_local_review routes based on qualitative verdict."""
 
+    def test_persistence_escalation_takes_priority_over_review_cap(self):
+        state = _bug_state(
+            current_node="escalate_blocked",
+            last_error="authentication failed",
+            qualitative_retry_count=2,
+        )
+        assert _route_after_local_review(state) == "escalate_blocked"
+
     def test_adequate_verdict_routes_to_create_pr(self):
         state = _bug_state(local_review_verdict="adequate", qualitative_retry_count=0)
         assert _route_after_local_review(state) == "update_documentation"
@@ -309,9 +320,16 @@ class TestGraphCompilation:
         graph = build_bug_graph()
         compiled = graph.compile()
         expected_nodes = {
-            "triage_check", "triage_gate", "analyze_bug", "reflect_rca",
-            "rca_option_gate", "regenerate_rca", "plan_bug_fix",
-            "plan_approval_gate", "regenerate_plan", "decompose_plan",
+            "triage_check",
+            "triage_gate",
+            "analyze_bug",
+            "reflect_rca",
+            "rca_option_gate",
+            "regenerate_rca",
+            "plan_bug_fix",
+            "plan_approval_gate",
+            "regenerate_plan",
+            "decompose_plan",
             "post_merge_summary",
         }
         for node in expected_nodes:

@@ -8,6 +8,8 @@ import pytest
 
 from forge.workflow.nodes.local_reviewer import _validate_pass_number, local_review_changes
 
+pytestmark = pytest.mark.usefixtures("mock_review_workspace_recovery")
+
 
 class TestValidatePassNumber:
     """Test the _validate_pass_number function."""
