@@ -31,7 +31,9 @@ def make_message(
 
 def make_consumer() -> QueueConsumer:
     """Return a QueueConsumer with a mocked RetryQueue."""
-    consumer = QueueConsumer(consumer_name="test-worker")
+    redis_mock = MagicMock()
+    redis_mock.xack = AsyncMock(return_value=1)
+    consumer = QueueConsumer(consumer_name="test-worker", redis_client=redis_mock)
     consumer._running = True
     # Replace the real RetryQueue with a mock
     consumer._retry_queue = MagicMock(spec=RetryQueue)

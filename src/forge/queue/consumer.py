@@ -240,59 +240,55 @@ class QueueConsumer:
         if self._active_tasks:
             await asyncio.gather(*self._active_tasks, return_exceptions=True)
 
-    async def _process_retry_queue(self) -> None:
-        """Poll the retry queue and re-dispatch due messages.
+    async def _process_due_retries_once(self) -> None:
+        """Dispatch one batch of due retries.
 
-        Runs as a background task alongside the stream consumers.  Polls on a
-        fixed interval so retries are dispatched once their backoff window has
-        elapsed.
+        Kept separate from the polling loop so recovery and terminal DLQ
+        behavior can be exercised deterministically in integration tests.
         """
+        entries = await self._retry_queue.get_due_messages()
+        for entry in entries:
+            retry_stream = (
+                JIRA_STREAM if entry.message.source == EventSource.JIRA else GITHUB_STREAM
+            )
+            try:
+                await self._process_message(
+                    entry.message, retry_stream, raise_on_error=True, skip_ack=True
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Retry attempt {entry.attempt} failed for "
+                    f"{entry.message.ticket_key}:{entry.message.event_id}: {e}"
+                )
+                # Preserve the counter across re-enqueues so exhaustion can
+                # eventually move the message to the dead-letter queue.
+                await self._retry_queue.remove_from_retry_without_counter_reset(entry)
+                queued = await self._retry_queue.enqueue_for_retry(entry.message, str(e))
+                if not queued:
+                    # Terminal failure: the DLQ now owns the message, so clear
+                    # its original stream PEL entry.
+                    await self._ack(retry_stream, entry.message.message_id)
+                continue
+
+            # Success: clear retry state and acknowledge the original entry.
+            await self._retry_queue.remove_from_retry(entry)
+            logger.info(
+                f"Retry succeeded for {entry.message.ticket_key}:"
+                f"{entry.message.event_id} (attempt {entry.attempt})"
+            )
+            try:
+                await self._ack(retry_stream, entry.message.message_id)
+            except Exception as xack_err:
+                logger.warning(
+                    f"xack failed for {entry.message.event_id} after successful "
+                    f"retry (PEL entry may linger): {xack_err}"
+                )
+
+    async def _process_retry_queue(self) -> None:
+        """Poll the retry queue and re-dispatch due messages."""
         while self._running:
             try:
-                entries = await self._retry_queue.get_due_messages()
-                for entry in entries:
-                    retry_stream = (
-                        JIRA_STREAM if entry.message.source == EventSource.JIRA else GITHUB_STREAM
-                    )
-                    try:
-                        await self._process_message(
-                            entry.message, retry_stream, raise_on_error=True, skip_ack=True
-                        )
-                    except Exception as e:
-                        logger.warning(
-                            f"Retry attempt {entry.attempt} failed for "
-                            f"{entry.message.ticket_key}:{entry.message.event_id}: {e}"
-                        )
-                        # Remove only the sorted-set entry — do NOT delete the attempt
-                        # counter key.  enqueue_for_retry will INCR the existing key so
-                        # the counter keeps accumulating and the message can eventually
-                        # reach the dead-letter queue.
-                        await self._retry_queue.remove_from_retry_without_counter_reset(entry)
-                        await self._retry_queue.enqueue_for_retry(entry.message, str(e))
-                        continue
-
-                    # Message processing succeeded — clean up retry state and
-                    # acknowledge the original stream entry (best-effort).
-                    await self._retry_queue.remove_from_retry(entry)
-                    logger.info(
-                        f"Retry succeeded for {entry.message.ticket_key}:"
-                        f"{entry.message.event_id} (attempt {entry.attempt})"
-                    )
-                    stream = (
-                        JIRA_STREAM if entry.message.source == EventSource.JIRA else GITHUB_STREAM
-                    )
-                    try:
-                        redis_client = await self._get_redis()
-                        await redis_client.xack(stream, CONSUMER_GROUP, entry.message.message_id)
-                    except Exception as xack_err:
-                        # xack is best-effort: the message was already successfully
-                        # processed and removed from the retry queue.  A failure here
-                        # only means the PEL entry lingers; it will not be reprocessed
-                        # because the retry-queue entry is gone.
-                        logger.warning(
-                            f"xack failed for {entry.message.event_id} after successful "
-                            f"retry (PEL entry may linger): {xack_err}"
-                        )
+                await self._process_due_retries_once()
             except asyncio.CancelledError:
                 break
             except Exception as e:
