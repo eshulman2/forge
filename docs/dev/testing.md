@@ -3,23 +3,32 @@
 ## Running the Test Suite
 
 ```bash
-# All unit tests
-uv run pytest tests/unit/ -v
+# Fast PR suites
+make test-pr
+
+# Redis-backed component integration tests
+make test-integration
+
+# Deterministic end-to-end smoke tests
+make test-e2e
 
 # Specific test file
 uv run pytest tests/unit/test_workflow.py -v
 
 # With coverage
-uv run pytest tests/unit/ --cov=src/forge --cov-report=term-missing
+make coverage
 ```
+
+Integration tests use `FORGE_TEST_REDIS_URL` when set and otherwise start a
+pinned Redis Stack testcontainer. CI sets `FORGE_REQUIRE_TEST_REDIS=1`, so a
+missing infrastructure dependency fails the gate instead of silently skipping it.
 
 ## Linting and Type Checking
 
 Before submitting a PR, these must all pass:
 
 ```bash
-uv run ruff check src/       # lint
-uv run ruff format src/      # format (auto-fix)
+make lint
 uv run mypy src/forge/       # type check
 ```
 

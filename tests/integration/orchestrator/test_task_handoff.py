@@ -53,6 +53,8 @@ class TestForgeDirectorySetup:
         with (
             patch("forge.workflow.nodes.workspace_setup.GitOperations") as MockGit,
             patch("forge.workflow.nodes.workspace_setup.GuardrailsLoader") as MockGuardrails,
+            patch("forge.workflow.nodes.workspace_setup.JiraClient") as MockJira,
+            patch("forge.workflow.nodes.workspace_setup.GitHubClient") as MockGitHub,
         ):
             mock_git = MagicMock()
             MockGit.return_value = mock_git
@@ -62,6 +64,16 @@ class TestForgeDirectorySetup:
                 get_system_context=MagicMock(return_value="")
             )
             MockGuardrails.return_value = mock_guardrails
+
+            MockJira.return_value.close = AsyncMock()
+            MockJira.return_value.add_comment = AsyncMock()
+            MockJira.return_value.get_labels = AsyncMock(return_value=[])
+            MockJira.return_value.add_labels = AsyncMock()
+            MockJira.return_value.remove_labels = AsyncMock()
+            MockGitHub.return_value.get_repository = AsyncMock(
+                return_value={"default_branch": "main"}
+            )
+            MockGitHub.return_value.close = AsyncMock()
 
             result = await setup_workspace(initial_state)
 
@@ -188,7 +200,7 @@ class TestHandoffPromptFormat:
             "Prompt should instruct agent to update handoff"
         )
 
-    def test_entrypoint_builds_prompt_with_previous_task_keys(self):
+    def test_entrypoint_builds_prompt_with_previous_task_keys(self, monkeypatch):
         """Entrypoint build_system_prompt should include previous task keys."""
         import sys
         from pathlib import Path
@@ -199,6 +211,8 @@ class TestHandoffPromptFormat:
 
         try:
             from entrypoint import build_system_prompt
+
+            monkeypatch.setenv("FORGE_SYSTEM_PROMPT_TEMPLATE", "Previous: {previous_task_keys}")
 
             prompt = build_system_prompt(
                 workspace=Path("/workspace"),
@@ -214,7 +228,7 @@ class TestHandoffPromptFormat:
         finally:
             sys.path.remove(str(containers_path))
 
-    def test_entrypoint_handles_empty_previous_tasks(self):
+    def test_entrypoint_handles_empty_previous_tasks(self, monkeypatch):
         """Entrypoint should handle case with no previous tasks."""
         import sys
         from pathlib import Path
@@ -224,6 +238,8 @@ class TestHandoffPromptFormat:
 
         try:
             from entrypoint import build_system_prompt
+
+            monkeypatch.setenv("FORGE_SYSTEM_PROMPT_TEMPLATE", "Previous: {previous_task_keys}")
 
             prompt = build_system_prompt(
                 workspace=Path("/workspace"),

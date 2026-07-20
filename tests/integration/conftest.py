@@ -1,5 +1,6 @@
 """Integration test fixtures - tests with mocked external services."""
 
+import os
 from collections.abc import AsyncGenerator, Generator
 from unittest.mock import AsyncMock, MagicMock
 
@@ -185,6 +186,7 @@ def _container_runtime_available() -> bool:
     """Check if Podman/Docker is available for testcontainers."""
     try:
         import docker
+
         client = docker.from_env()
         client.ping()
         return True
@@ -203,13 +205,21 @@ def redis_container():
     if not _container_runtime_available():
         pytest.skip("Podman/Docker not available - skipping testcontainers tests")
 
-    with RedisContainer("redis/redis-stack-server:latest") as container:
+    with RedisContainer("redis/redis-stack-server:7.4.0-v3") as container:
         yield container
 
 
 @pytest.fixture(scope="session")
-def redis_url(redis_container) -> str:
-    """Get the Redis URL from the container."""
+def redis_url(request: pytest.FixtureRequest) -> str:
+    """Get the Redis URL from CI or a local testcontainer."""
+    configured_url = os.environ.get("FORGE_TEST_REDIS_URL")
+    if configured_url:
+        return configured_url
+
+    if os.environ.get("FORGE_REQUIRE_TEST_REDIS") == "1" and not _container_runtime_available():
+        pytest.fail("Redis integration gate requires FORGE_TEST_REDIS_URL or a container runtime")
+
+    redis_container = request.getfixturevalue("redis_container")
     host = redis_container.get_container_host_ip()
     port = redis_container.get_exposed_port(6379)
     return f"redis://{host}:{port}/0"

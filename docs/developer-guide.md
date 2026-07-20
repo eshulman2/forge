@@ -281,14 +281,18 @@ curl http://localhost:8000/api/v1/health
 ## 5. Running Tests
 
 ```bash
-# Full test suite
-uv run pytest
+# Fast PR suites
+make test-pr
 
 # Unit tests only (fast)
 uv run pytest tests/unit/ -v
 
 # Flow/scenario tests
-uv run pytest tests/flows/ -v
+make test-flow
+
+# Redis-backed integration and deterministic E2E tests
+make test-integration
+make test-e2e
 
 # Single file
 uv run pytest tests/unit/workflow/test_ci_gate_skip.py -v
@@ -296,14 +300,16 @@ uv run pytest tests/unit/workflow/test_ci_gate_skip.py -v
 # With output (useful for debugging)
 uv run pytest tests/unit/ -s
 
-# Linting
-uv run ruff check src/
+# Linting and formatting checks
+make lint
 
 # Type checking
 uv run mypy src/forge/
 ```
 
-The pre-existing failures in `tests/flows/status_transitions/` and a few other files are known issues unrelated to current work — ignore them.
+Tests marked `quarantine` document obsolete scenarios that still need an
+architecture rewrite; required gates exclude them explicitly. New failures in
+unit, contract, flow, integration, or E2E gates must not be ignored.
 
 ---
 

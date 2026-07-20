@@ -17,7 +17,7 @@ from forge.models.workflow import TicketType
 from forge.workflow.feature.state import FeatureState as WorkflowState
 from forge.workflow.feature.state import create_initial_feature_state as create_initial_state
 
-pytestmark = pytest.mark.skip(reason="Needs update for pluggable workflows architecture")
+pytestmark = pytest.mark.quarantine
 
 
 @pytest.fixture

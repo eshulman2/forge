@@ -1,6 +1,7 @@
 """Shared test fixtures for Forge test suite."""
 
 from collections.abc import AsyncGenerator, Generator
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -9,6 +10,26 @@ from httpx import ASGITransport, AsyncClient
 
 from forge.config import Settings
 from forge.main import app
+
+_TEST_DIRECTORY_MARKERS = {
+    "unit": "unit",
+    "contracts": "contract",
+    "flows": "flow",
+    "integration": "integration",
+    "e2e": "e2e",
+}
+
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """Apply one test-layer marker based on the suite's top-level directory."""
+    for item in items:
+        try:
+            relative_path = item.path.relative_to(Path(__file__).parent)
+        except ValueError:
+            continue
+        marker = _TEST_DIRECTORY_MARKERS.get(relative_path.parts[0])
+        if marker is not None:
+            item.add_marker(getattr(pytest.mark, marker))
 
 
 @pytest.fixture

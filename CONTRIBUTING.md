@@ -64,10 +64,16 @@ See the [Developer Guide](docs/developer-guide.md) for the full local setup, inc
 Before submitting a PR, make sure these pass:
 
 ```bash
-uv run pytest tests/unit/ -v
-uv run ruff check src/
-uv run mypy src/forge/
+make lint
+make test-pr
+make test-integration  # requires Docker/Podman, or FORGE_TEST_REDIS_URL
+make test-e2e
 ```
+
+The required CI gates run unit coverage, API contract tests, workflow flow tests,
+Redis-backed integration tests, deterministic E2E smoke tests, and a production
+container build independently. Unit coverage must remain at or above 60%; the
+report includes branch coverage and is uploaded as a CI artifact.
 
 ## Pull request guidelines
 

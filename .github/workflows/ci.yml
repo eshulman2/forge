@@ -31,8 +31,8 @@ jobs:
       - name: Check formatting (ruff)
         run: uv run ruff format --check src/
 
-  test:
-    name: Unit Tests
+  unit-coverage:
+    name: Unit Tests & Coverage
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -50,13 +50,119 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen --extra dev
 
-      - name: Run unit tests
+      - name: Run unit tests with branch coverage
         env:
           JIRA_BASE_URL: https://example.atlassian.net
           JIRA_API_TOKEN: dummy
           JIRA_USER_EMAIL: dummy@example.com
           GITHUB_TOKEN: dummy
-        run: uv run pytest tests/unit/ -q
+        run: >-
+          uv run pytest tests/unit/ -q
+          --cov=forge --cov-branch
+          --cov-report=term-missing
+          --cov-report=xml
+          --cov-fail-under=60
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-coverage
+          path: coverage.xml
+          if-no-files-found: ignore
+
+  contracts-and-flows:
+    name: Contract & Workflow Flow Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev
+
+      - name: Run contract and workflow flow tests
+        env:
+          JIRA_BASE_URL: https://example.atlassian.net
+          JIRA_API_TOKEN: dummy
+          JIRA_USER_EMAIL: dummy@example.com
+          GITHUB_TOKEN: dummy
+        run: uv run pytest tests/contracts tests/flows -q --strict-markers
+
+  integration:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis/redis-stack-server:7.4.0-v3
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev
+
+      - name: Run integration tests
+        env:
+          JIRA_BASE_URL: https://example.atlassian.net
+          JIRA_API_TOKEN: dummy
+          JIRA_USER_EMAIL: dummy@example.com
+          GITHUB_TOKEN: dummy
+          FORGE_TEST_REDIS_URL: redis://localhost:6379/0
+          FORGE_REQUIRE_TEST_REDIS: "1"
+        run: uv run pytest tests/integration -q --strict-markers -m "integration and not quarantine"
+
+  e2e-smoke:
+    name: E2E Smoke Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev
+
+      - name: Run deterministic E2E smoke tests
+        env:
+          JIRA_BASE_URL: https://example.atlassian.net
+          JIRA_API_TOKEN: dummy
+          JIRA_USER_EMAIL: dummy@example.com
+          GITHUB_TOKEN: dummy
+        run: uv run pytest tests/e2e -q --strict-markers -m "e2e and not external"
 
   container-build:
     name: Container Build
