@@ -57,7 +57,7 @@ jobs:
           JIRA_USER_EMAIL: dummy@example.com
           GITHUB_TOKEN: dummy
         run: >-
-          uv run pytest tests/unit/ -q
+          uv run pytest tests/unit/ tests/contracts tests/flows -q --strict-markers
           --cov=forge --cov-branch
           --cov-report=term-missing
           --cov-report=xml

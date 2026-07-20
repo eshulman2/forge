@@ -26,9 +26,8 @@ def test_feature_workflow_routes_generates_and_pauses() -> None:
 
     with patch("forge.workflow.feature.graph.generate_prd", _generate_prd):
         graph = workflow.build_graph().compile()
-
-    state = workflow.create_initial_state("TEST-123")
-    result = graph.invoke(state)
+        state = workflow.create_initial_state("TEST-123")
+        result = graph.invoke(state)
 
     assert result["prd_content"].startswith("# PRD")
     assert result["current_node"] == "prd_approval_gate"

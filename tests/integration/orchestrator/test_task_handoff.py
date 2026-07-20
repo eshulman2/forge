@@ -212,7 +212,9 @@ class TestHandoffPromptFormat:
         try:
             from entrypoint import build_system_prompt
 
-            monkeypatch.setenv("FORGE_SYSTEM_PROMPT_TEMPLATE", "Previous: {previous_task_keys}")
+            from forge.prompts import load_prompt
+
+            monkeypatch.setenv("FORGE_SYSTEM_PROMPT_TEMPLATE", load_prompt("container-system"))
 
             prompt = build_system_prompt(
                 workspace=Path("/workspace"),
@@ -239,7 +241,9 @@ class TestHandoffPromptFormat:
         try:
             from entrypoint import build_system_prompt
 
-            monkeypatch.setenv("FORGE_SYSTEM_PROMPT_TEMPLATE", "Previous: {previous_task_keys}")
+            from forge.prompts import load_prompt
+
+            monkeypatch.setenv("FORGE_SYSTEM_PROMPT_TEMPLATE", load_prompt("container-system"))
 
             prompt = build_system_prompt(
                 workspace=Path("/workspace"),
