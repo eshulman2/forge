@@ -2,6 +2,7 @@
 
 import logging
 import shutil
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -38,24 +39,61 @@ def _recreate_workspace_from_fork(
             "missing branch_name, current_repo, fork_owner, or fork_repo in state"
         )
 
-    if stale_workspace_path:
-        stale_path = Path(stale_workspace_path)
-        if stale_path.exists():
-            logger.warning(
-                "Removing existing workspace for %s before recreating from fork: %s",
-                ticket_key,
-                stale_path,
-            )
-            shutil.rmtree(stale_path)
-
     manager = WorkspaceManager(base_dir=get_settings().workspace_base_dir)
     workspace_obj = manager.create_workspace(repo_name=current_repo, ticket_key=ticket_key)
-    git = GitOperations(workspace_obj)
-    git.clone()
-    git.add_fork_remote(fork_owner, fork_repo)
-    git.checkout_branch(branch_name, remote="fork")
-    logger.info(f"Workspace recreated at {workspace_obj.path} for {ticket_key}")
-    return str(workspace_obj.path), git
+    target_path = workspace_obj.path
+    stale_path = Path(stale_workspace_path) if stale_workspace_path else None
+
+    # Build and validate the replacement beside the target.  The existing
+    # workspace may contain the only copy of an unpushed commit, so it must not
+    # be removed merely because fetch/rebase failed.
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    replacement_path = Path(
+        tempfile.mkdtemp(prefix=f".{target_path.name}-replacement-", dir=target_path.parent)
+    )
+    replacement_workspace = Workspace(
+        path=replacement_path,
+        repo_name=current_repo,
+        branch_name=branch_name,
+        ticket_key=ticket_key,
+    )
+    git = GitOperations(replacement_workspace)
+    try:
+        git.clone()
+        git.add_fork_remote(fork_owner, fork_repo)
+        git.checkout_branch(branch_name, remote="fork")
+    except Exception:
+        shutil.rmtree(replacement_path, ignore_errors=True)
+        raise
+
+    old_path = stale_path if stale_path and stale_path.exists() else None
+    backup_path: Path | None = None
+    try:
+        if old_path:
+            backup_path = Path(
+                tempfile.mkdtemp(prefix=f".{target_path.name}-old-", dir=target_path.parent)
+            )
+            backup_path.rmdir()
+            old_path.rename(backup_path)
+        elif target_path.exists() and target_path != replacement_path:
+            # create_workspace creates the deterministic target directory when
+            # recovery starts without a stale workspace.
+            target_path.rmdir()
+
+        replacement_path.rename(target_path)
+    except Exception:
+        if backup_path and backup_path.exists() and not target_path.exists():
+            backup_path.rename(target_path)
+        shutil.rmtree(replacement_path, ignore_errors=True)
+        raise
+
+    if backup_path and backup_path.exists():
+        shutil.rmtree(backup_path)
+
+    git.workspace.path = target_path
+    git.workspace_recreated = True
+    logger.info(f"Workspace recreated at {target_path} for {ticket_key}")
+    return str(target_path), git
 
 
 def prepare_workspace(

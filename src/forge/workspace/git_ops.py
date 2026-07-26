@@ -22,6 +22,11 @@ class GitOperations:
         """
         self.workspace = workspace
         self.settings = get_settings()
+        # Set by workspace recovery when this instance represents a replacement
+        # clone rather than the workspace recorded in workflow state.  The path
+        # alone cannot identify that case because managed workspaces reuse a
+        # deterministic path for each ticket and repository.
+        self.workspace_recreated = False
 
     @property
     def repo_path(self) -> Path:

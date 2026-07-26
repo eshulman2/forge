@@ -343,6 +343,33 @@ class TestImplementationNodeRouting:
         assert result["implementation_push_pending"] is False
 
     @pytest.mark.asyncio
+    async def test_same_path_recreation_does_not_mark_pending_task_complete(self, tmp_path) -> None:
+        """A deterministic path does not prove that the original clone survived."""
+        from forge.workflow.nodes.implementation import implement_task
+
+        state = _make_state(workspace_path=str(tmp_path))
+        state["implementation_push_pending"] = True
+        state["implementation_push_pending_task"] = "TASK-456"
+        mock_git = MagicMock()
+        mock_git.workspace_recreated = True
+        mock_jira = _make_mock_jira()
+        runner = _make_successful_runner()
+
+        with (
+            patch(
+                "forge.workflow.nodes.implementation.prepare_workspace",
+                return_value=(str(tmp_path), mock_git),
+            ),
+            patch("forge.workflow.nodes.implementation.JiraClient", return_value=mock_jira),
+            patch("forge.workflow.nodes.implementation.ContainerRunner", return_value=runner),
+            patch("forge.workflow.nodes.implementation.get_settings"),
+        ):
+            result = await implement_task(state)
+
+        runner.run.assert_awaited_once()
+        assert result["implementation_push_pending"] is False
+
+    @pytest.mark.asyncio
     async def test_bug_container_failure_keeps_bug_implementation_node(self):
         """Bug container failures keep the bug graph retry node."""
         from forge.workflow.nodes.implementation import implement_task

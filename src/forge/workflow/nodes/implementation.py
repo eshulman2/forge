@@ -68,7 +68,11 @@ async def implement_task(state: WorkflowState) -> WorkflowState:
             "current_node": implementation_node,
         }
 
-    same_workspace_survived = local_workspace_survived and workspace_path == recorded_workspace
+    same_workspace_survived = (
+        local_workspace_survived
+        and workspace_path == recorded_workspace
+        and git.workspace_recreated is not True
+    )
     if state.get("implementation_push_pending") and same_workspace_survived:
         try:
             await push_to_fork_with_retry(git)

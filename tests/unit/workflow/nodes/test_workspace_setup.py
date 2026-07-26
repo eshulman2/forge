@@ -319,3 +319,38 @@ class TestPrepareWorkspaceRecovery:
         new_git.clone.assert_called_once()
         new_git.add_fork_remote.assert_called_once_with("forge-bot", "repo")
         new_git.checkout_branch.assert_called_once_with("forge/test-123", remote="fork")
+        assert new_git.workspace_recreated is True
+
+    def test_failed_replacement_preserves_existing_workspace(self, tmp_path):
+        """A failed recovery clone must not delete the only local commit."""
+        workspace_path = tmp_path / "forge-TEST-124-org-repo"
+        workspace_path.mkdir()
+        local_commit = workspace_path / "local-commit.txt"
+        local_commit.write_text("not pushed yet")
+
+        state = create_initial_feature_state(
+            ticket_key="TEST-124",
+            current_repo="org/repo",
+            workspace_path=str(workspace_path),
+            fork_owner="forge-bot",
+            fork_repo="repo",
+            context={"branch_name": "forge/test-124"},
+        )
+
+        old_git = MagicMock()
+        old_git.pull_rebase.side_effect = RuntimeError("sync failed")
+        new_git = MagicMock()
+        new_git.clone.side_effect = RuntimeError("clone failed")
+        settings = MagicMock(workspace_base_dir=str(tmp_path))
+
+        with (
+            patch("forge.workflow.nodes.workspace_setup.get_settings", return_value=settings),
+            patch(
+                "forge.workflow.nodes.workspace_setup.GitOperations",
+                side_effect=[old_git, new_git],
+            ),
+            pytest.raises(RuntimeError, match="clone failed"),
+        ):
+            prepare_workspace(state)
+
+        assert local_commit.read_text() == "not pushed yet"

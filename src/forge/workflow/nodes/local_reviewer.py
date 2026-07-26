@@ -114,7 +114,11 @@ async def local_review_changes(state: WorkflowState) -> WorkflowState:
             {**state, "current_node": "create_pr", "last_error": str(exc)}
         )
 
-    same_workspace_survived = local_workspace_survived and workspace_path == recorded_workspace
+    same_workspace_survived = (
+        local_workspace_survived
+        and workspace_path == recorded_workspace
+        and git.workspace_recreated is not True
+    )
     if state.get("review_push_pending") and same_workspace_survived:
         try:
             await push_to_fork_with_retry(git)
