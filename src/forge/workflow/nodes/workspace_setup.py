@@ -232,38 +232,46 @@ async def setup_workspace(state: WorkflowState) -> WorkflowState:
         git.clone()
         logger.info(f"Clone completed successfully for {current_repo}")
 
-        # Detect the upstream default branch (main, master, etc.)
+        # Detect the upstream default branch and establish the durable fork
+        # before implementation starts.  Every implementation/review handoff
+        # pushes to this fork, so continuing without it would guarantee a
+        # later persistence failure.
         default_branch = "main"
+        fork_owner = state.get("fork_owner", "")
+        fork_repo_name = state.get("fork_repo", "")
         if current_repo and "/" in current_repo:
             owner, repo_name = current_repo.split("/", 1)
             github = GitHubClient()
             try:
-                repo_data = await github.get_repository(owner, repo_name)
-                default_branch = repo_data.get("default_branch", "main")
-                logger.info(f"Detected default branch for {current_repo}: {default_branch}")
-            except Exception as exc:
-                logger.warning(f"Could not detect default branch for {current_repo}: {exc}")
+                try:
+                    repo_data = await github.get_repository(owner, repo_name)
+                    default_branch = repo_data.get("default_branch", "main")
+                    logger.info(f"Detected default branch for {current_repo}: {default_branch}")
+                except Exception as exc:
+                    logger.warning(f"Could not detect default branch for {current_repo}: {exc}")
+
+                if not fork_owner or not fork_repo_name:
+                    fork_data = await github.get_or_create_fork(owner, repo_name)
+                    fork_owner = fork_data["owner"]["login"]
+                    fork_repo_name = fork_data["name"]
+
+                await github.sync_fork_with_upstream(
+                    fork_owner,
+                    fork_repo_name,
+                    branch=default_branch,
+                )
             finally:
                 await github.close()
 
         # Set up feature branch.
-        # If the workflow already created a PR (fork_owner/fork_repo in state),
-        # the branch lives on the fork. Add the fork remote, check whether the
-        # branch exists there, and check it out so we don't lose history.
-        fork_owner = state.get("fork_owner", "")
-        fork_repo_name = state.get("fork_repo", "")
-
-        if fork_owner and fork_repo_name:
-            git.add_fork_remote(fork_owner, fork_repo_name)
-            branch_exists_on_fork = git.remote_branch_exists(workspace.branch_name, remote="fork")
-            if branch_exists_on_fork:
-                logger.info(
-                    f"Branch '{workspace.branch_name}' exists on fork "
-                    f"{fork_owner}/{fork_repo_name} — checking it out"
-                )
-                git.checkout_branch(workspace.branch_name, remote="fork")
-            else:
-                git.create_branch(default_branch)
+        git.add_fork_remote(fork_owner, fork_repo_name)
+        branch_exists_on_fork = git.remote_branch_exists(workspace.branch_name, remote="fork")
+        if branch_exists_on_fork:
+            logger.info(
+                f"Branch '{workspace.branch_name}' exists on fork "
+                f"{fork_owner}/{fork_repo_name} — checking it out"
+            )
+            git.checkout_branch(workspace.branch_name, remote="fork")
         else:
             git.create_branch(default_branch)
 
@@ -303,6 +311,8 @@ async def setup_workspace(state: WorkflowState) -> WorkflowState:
                 **state,
                 "workspace_path": str(workspace.path),
                 "current_repo": current_repo,
+                "fork_owner": fork_owner,
+                "fork_repo": fork_repo_name,
                 "context": context,
                 "current_node": "implementation",
                 "last_error": None,

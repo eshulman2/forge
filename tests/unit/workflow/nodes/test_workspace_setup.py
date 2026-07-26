@@ -64,6 +64,20 @@ def create_mock_guardrails_loader():
     return mock
 
 
+@pytest.fixture(autouse=True)
+def mock_workspace_github():
+    """Keep workspace tests isolated from GitHub fork operations."""
+    github = MagicMock()
+    github.get_repository = AsyncMock(return_value={"default_branch": "main"})
+    github.get_or_create_fork = AsyncMock(
+        return_value={"owner": {"login": "fork-owner"}, "name": "test-repo"}
+    )
+    github.sync_fork_with_upstream = AsyncMock(return_value=True)
+    github.close = AsyncMock()
+    with patch("forge.workflow.nodes.workspace_setup.GitHubClient", return_value=github):
+        yield github
+
+
 class TestWorkspaceSetupStatusComment:
     """Test cases for workspace setup posting status comments."""
 
@@ -277,6 +291,77 @@ class TestWorkspaceSetupErrorHandling:
         # Verify workspace setup continued successfully
         assert result["workspace_path"] == str(Path("/tmp/test-workspace"))
         mock_jira.close.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_workspace_setup_fails_when_fork_cannot_be_created(
+        self, mock_workspace_github
+    ):
+        """Implementation must not start without its durable backup remote."""
+        mock_workspace_github.get_or_create_fork.side_effect = RuntimeError(
+            "fork creation denied"
+        )
+        mock_jira = create_mock_jira_client()
+        mock_manager, _ = create_mock_workspace_manager()
+        mock_git = create_mock_git_operations()
+
+        state = create_initial_feature_state(
+            ticket_key="TEST-FORK-FAIL",
+            current_repo="owner/test-repo",
+        )
+
+        with (
+            patch("forge.workflow.nodes.workspace_setup.JiraClient", return_value=mock_jira),
+            patch(
+                "forge.workflow.nodes.workspace_setup.get_workspace_manager",
+                return_value=mock_manager,
+            ),
+            patch("forge.workflow.nodes.workspace_setup.GitOperations", return_value=mock_git),
+        ):
+            result = await setup_workspace(state)
+
+        assert result["current_node"] == "setup_workspace"
+        assert result["last_error"] == "fork creation denied"
+        mock_git.add_fork_remote.assert_not_called()
+        mock_git.create_branch.assert_not_called()
+
+
+class TestWorkspaceSetupForkBootstrap:
+    """Tests for creating and checkpointing the implementation backup fork."""
+
+    @pytest.mark.asyncio
+    async def test_creates_fork_remote_before_implementation(
+        self, mock_workspace_github
+    ):
+        mock_jira = create_mock_jira_client()
+        mock_manager, _ = create_mock_workspace_manager()
+        mock_git = create_mock_git_operations()
+        mock_guardrails_loader = create_mock_guardrails_loader()
+        state = create_initial_feature_state(
+            ticket_key="TEST-FORK",
+            current_repo="upstream/repo",
+        )
+
+        with (
+            patch("forge.workflow.nodes.workspace_setup.JiraClient", return_value=mock_jira),
+            patch(
+                "forge.workflow.nodes.workspace_setup.get_workspace_manager",
+                return_value=mock_manager,
+            ),
+            patch("forge.workflow.nodes.workspace_setup.GitOperations", return_value=mock_git),
+            patch("forge.workflow.nodes.workspace_setup.GuardrailsLoader", mock_guardrails_loader),
+        ):
+            result = await setup_workspace(state)
+
+        mock_workspace_github.get_or_create_fork.assert_awaited_once_with(
+            "upstream", "repo"
+        )
+        mock_workspace_github.sync_fork_with_upstream.assert_awaited_once_with(
+            "fork-owner", "test-repo", branch="main"
+        )
+        mock_git.add_fork_remote.assert_called_once_with("fork-owner", "test-repo")
+        assert result["fork_owner"] == "fork-owner"
+        assert result["fork_repo"] == "test-repo"
+        assert result["current_node"] == "implementation"
 
 
 class TestPrepareWorkspaceRecovery:
