@@ -46,8 +46,15 @@ async def _create_spec_proposal_pr(
         fork = await gh.get_or_create_fork(owner, repo)
         fork_owner = fork["owner"]["login"]
         fork_repo = fork["name"]
-        await gh.sync_fork_with_upstream(fork_owner, fork_repo)
-        await gh.create_branch(fork_owner, fork_repo, branch)
+        default_branch = fork.get("default_branch") or "main"
+        synced = await gh.sync_fork_with_upstream(fork_owner, fork_repo, branch=default_branch)
+        if not synced:
+            raise RuntimeError(
+                f"Could not synchronize proposal fork {fork_owner}/{fork_repo}:"
+                f"{default_branch} with upstream"
+            )
+        await gh.create_branch(fork_owner, fork_repo, branch, base=default_branch)
+        existing_file = await gh.get_file_contents(fork_owner, fork_repo, file_path, branch)
         await gh.create_or_update_file(
             owner=fork_owner,
             repo=fork_repo,
@@ -55,6 +62,7 @@ async def _create_spec_proposal_pr(
             content=spec_content,
             message=f"Add spec for {ticket_key}",
             branch=branch,
+            sha=existing_file["sha"] if existing_file else None,
         )
         pr_body = (
             f"**Spec for [{ticket_key}](https://redhat.atlassian.net/browse/{ticket_key})**\n\n"
@@ -69,6 +77,7 @@ async def _create_spec_proposal_pr(
             title=f"[{ticket_key}] Spec: {summary}",
             body=pr_body,
             head=f"{fork_owner}:{branch}",
+            base=default_branch,
         )
 
         pr_url = pr_data["html_url"]
