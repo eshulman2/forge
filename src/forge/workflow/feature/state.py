@@ -50,6 +50,8 @@ class FeatureState(
     prd_pr_url: str | None
     prd_pr_number: int | None
     prd_pr_repo: str | None
+    prd_pr_fork_owner: str | None
+    prd_pr_fork_repo: str | None
     prd_pr_branch: str | None
     prd_pr_file_path: str | None
 
@@ -57,6 +59,8 @@ class FeatureState(
     spec_pr_url: str | None
     spec_pr_number: int | None
     spec_pr_repo: str | None
+    spec_pr_fork_owner: str | None
+    spec_pr_fork_repo: str | None
     spec_pr_branch: str | None
     spec_pr_file_path: str | None
 
@@ -130,11 +134,15 @@ def create_initial_feature_state(ticket_key: str, **kwargs: Any) -> FeatureState
         "prd_pr_url": None,
         "prd_pr_number": None,
         "prd_pr_repo": None,
+        "prd_pr_fork_owner": None,
+        "prd_pr_fork_repo": None,
         "prd_pr_branch": None,
         "prd_pr_file_path": None,
         "spec_pr_url": None,
         "spec_pr_number": None,
         "spec_pr_repo": None,
+        "spec_pr_fork_owner": None,
+        "spec_pr_fork_repo": None,
         "spec_pr_branch": None,
         "spec_pr_file_path": None,
         "yolo_mode": False,

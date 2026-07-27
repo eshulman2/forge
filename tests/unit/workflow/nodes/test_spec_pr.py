@@ -14,6 +14,10 @@ class TestCreateSpecProposalPr:
         from forge.workflow.nodes.spec_generation import _create_spec_proposal_pr
 
         mock_gh = MagicMock()
+        mock_gh.get_or_create_fork = AsyncMock(
+            return_value={"owner": {"login": "forge-bot"}, "name": "proposals"}
+        )
+        mock_gh.sync_fork_with_upstream = AsyncMock(return_value=True)
         mock_gh.create_branch = AsyncMock(return_value={"ref": "refs/heads/forge/spec/test-123"})
         mock_gh.create_or_update_file = AsyncMock(
             return_value={"content": {"sha": "filesha"}}
@@ -52,9 +56,16 @@ class TestCreateSpecProposalPr:
         assert result["spec_pr_branch"] == "forge/spec/test-123"
         assert result["spec_pr_file_path"] == "TEST-123/design.md"
 
-        mock_gh.create_branch.assert_called_once_with("org", "proposals", "forge/spec/test-123")
+        mock_gh.create_branch.assert_called_once_with(
+            "forge-bot", "proposals", "forge/spec/test-123"
+        )
+        assert result["spec_pr_fork_owner"] == "forge-bot"
+        assert result["spec_pr_fork_repo"] == "proposals"
         mock_gh.create_pull_request.assert_called_once()
         pr_call_kwargs = mock_gh.create_pull_request.call_args[1]
+        assert pr_call_kwargs["owner"] == "org"
+        assert pr_call_kwargs["repo"] == "proposals"
+        assert pr_call_kwargs["head"] == "forge-bot:forge/spec/test-123"
         assert "# My Spec" not in pr_call_kwargs["body"]
         assert "TEST-123/design.md" in pr_call_kwargs["body"]
         mock_jira.add_comment.assert_called_once()
@@ -66,6 +77,10 @@ class TestCreateSpecProposalPr:
         from forge.workflow.nodes.spec_generation import _create_spec_proposal_pr
 
         mock_gh = MagicMock()
+        mock_gh.get_or_create_fork = AsyncMock(
+            return_value={"owner": {"login": "forge-bot"}, "name": "proposals"}
+        )
+        mock_gh.sync_fork_with_upstream = AsyncMock(return_value=True)
         mock_gh.create_branch = AsyncMock(return_value={"ref": "refs/heads/forge/spec/test-456"})
         mock_gh.create_or_update_file = AsyncMock(
             return_value={"content": {"sha": "filesha"}}
@@ -124,6 +139,8 @@ class TestUpdateSpecProposalPr:
             ticket_type=TicketType.FEATURE,
             spec_pr_branch="forge/spec/test-123",
             spec_pr_repo="org/proposals",
+            spec_pr_fork_owner="forge-bot",
+            spec_pr_fork_repo="proposals",
             spec_pr_number=12,
             spec_pr_url="https://github.com/org/proposals/pull/12",
             spec_pr_file_path="TEST-123/design.md",
@@ -137,10 +154,15 @@ class TestUpdateSpecProposalPr:
             )
 
         mock_gh.get_file_contents.assert_called_once_with(
-            "org", "proposals", "TEST-123/design.md", "forge/spec/test-123"
+            "forge-bot", "proposals", "TEST-123/design.md", "forge/spec/test-123"
         )
         mock_gh.create_or_update_file.assert_called_once()
         call_kwargs = mock_gh.create_or_update_file.call_args[1]
         assert call_kwargs["sha"] == "oldsha"
         assert call_kwargs["path"] == "TEST-123/design.md"
-        mock_gh.create_issue_comment.assert_called_once()
+        mock_gh.create_issue_comment.assert_called_once_with(
+            "org",
+            "proposals",
+            12,
+            "Specification has been revised based on feedback. Please review the updated version.",
+        )

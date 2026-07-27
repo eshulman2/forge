@@ -43,10 +43,14 @@ async def _create_spec_proposal_pr(
     gh = GitHubClient()
     jira = JiraClient()
     try:
-        await gh.create_branch(owner, repo, branch)
+        fork = await gh.get_or_create_fork(owner, repo)
+        fork_owner = fork["owner"]["login"]
+        fork_repo = fork["name"]
+        await gh.sync_fork_with_upstream(fork_owner, fork_repo)
+        await gh.create_branch(fork_owner, fork_repo, branch)
         await gh.create_or_update_file(
-            owner=owner,
-            repo=repo,
+            owner=fork_owner,
+            repo=fork_repo,
             path=file_path,
             content=spec_content,
             message=f"Add spec for {ticket_key}",
@@ -64,7 +68,7 @@ async def _create_spec_proposal_pr(
             repo=repo,
             title=f"[{ticket_key}] Spec: {summary}",
             body=pr_body,
-            head=branch,
+            head=f"{fork_owner}:{branch}",
         )
 
         pr_url = pr_data["html_url"]
@@ -83,6 +87,8 @@ async def _create_spec_proposal_pr(
             "spec_pr_url": pr_url,
             "spec_pr_number": pr_number,
             "spec_pr_repo": proposals_repo,
+            "spec_pr_fork_owner": fork_owner,
+            "spec_pr_fork_repo": fork_repo,
             "spec_pr_branch": branch,
             "spec_pr_file_path": file_path,
         }
@@ -97,7 +103,9 @@ async def _update_spec_proposal_pr(
     state: dict[str, Any],
 ) -> None:
     """Push updated spec content to the existing proposal PR branch."""
-    owner, repo = state["spec_pr_repo"].split("/", 1)
+    upstream_owner, upstream_repo = state["spec_pr_repo"].split("/", 1)
+    owner = state.get("spec_pr_fork_owner") or upstream_owner
+    repo = state.get("spec_pr_fork_repo") or upstream_repo
     branch = state["spec_pr_branch"]
     pr_number = state["spec_pr_number"]
     file_path = state["spec_pr_file_path"]
@@ -119,8 +127,8 @@ async def _update_spec_proposal_pr(
             sha=file_meta["sha"],
         )
         await gh.create_issue_comment(
-            owner,
-            repo,
+            upstream_owner,
+            upstream_repo,
             pr_number,
             "Specification has been revised based on feedback. Please review the updated version.",
         )

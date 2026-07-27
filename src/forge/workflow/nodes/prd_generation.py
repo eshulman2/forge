@@ -83,10 +83,14 @@ async def _create_prd_proposal_pr(
     gh = GitHubClient()
     jira = JiraClient()
     try:
-        await gh.create_branch(owner, repo, branch)
+        fork = await gh.get_or_create_fork(owner, repo)
+        fork_owner = fork["owner"]["login"]
+        fork_repo = fork["name"]
+        await gh.sync_fork_with_upstream(fork_owner, fork_repo)
+        await gh.create_branch(fork_owner, fork_repo, branch)
         await gh.create_or_update_file(
-            owner=owner,
-            repo=repo,
+            owner=fork_owner,
+            repo=fork_repo,
             path=file_path,
             content=prd_content,
             message=f"Add PRD for {ticket_key}",
@@ -104,7 +108,7 @@ async def _create_prd_proposal_pr(
             repo=repo,
             title=f"[{ticket_key}] PRD: {summary}",
             body=pr_body,
-            head=branch,
+            head=f"{fork_owner}:{branch}",
         )
 
         pr_url = pr_data["html_url"]
@@ -122,6 +126,8 @@ async def _create_prd_proposal_pr(
             "prd_pr_url": pr_url,
             "prd_pr_number": pr_number,
             "prd_pr_repo": proposals_repo,
+            "prd_pr_fork_owner": fork_owner,
+            "prd_pr_fork_repo": fork_repo,
             "prd_pr_branch": branch,
             "prd_pr_file_path": file_path,
         }
@@ -136,7 +142,9 @@ async def _update_prd_proposal_pr(
     state: dict[str, Any],
 ) -> None:
     """Push updated PRD content to the existing proposal PR branch."""
-    owner, repo = state["prd_pr_repo"].split("/", 1)
+    upstream_owner, upstream_repo = state["prd_pr_repo"].split("/", 1)
+    owner = state.get("prd_pr_fork_owner") or upstream_owner
+    repo = state.get("prd_pr_fork_repo") or upstream_repo
     branch = state["prd_pr_branch"]
     pr_number = state["prd_pr_number"]
     file_path = state["prd_pr_file_path"]
@@ -158,8 +166,8 @@ async def _update_prd_proposal_pr(
             sha=file_meta["sha"],
         )
         await gh.create_issue_comment(
-            owner,
-            repo,
+            upstream_owner,
+            upstream_repo,
             pr_number,
             "PRD has been revised based on feedback. Please review the updated version.",
         )
