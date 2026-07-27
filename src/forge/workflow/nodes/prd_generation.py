@@ -6,15 +6,18 @@ from typing import Any
 
 from forge.config import get_settings
 from forge.integrations.agents import ForgeAgent
-from forge.integrations.github.client import GitHubClient
 from forge.integrations.jira.client import (
     JiraClient,
     artifact_interaction_options,
     pr_interaction_options,
 )
 from forge.models.workflow import ForgeLabel
-from forge.orchestrator.checkpointer import set_pr_ticket_index
 from forge.workflow.feature.state import FeatureState as WorkflowState
+from forge.workflow.nodes.proposal_pr import (
+    PRD_PROPOSAL,
+    create_proposal_pr,
+    update_proposal_pr,
+)
 from forge.workflow.utils import update_state_timestamp
 from forge.workflow.utils.jira_status import post_status_comment
 
@@ -75,74 +78,15 @@ async def _create_prd_proposal_pr(
     proposals_path: str = "",
 ) -> dict[str, Any]:
     """Create a PR with the PRD in the enhancement proposals repo."""
-    owner, repo = proposals_repo.split("/", 1)
-    branch = f"forge/prd/{ticket_key.lower()}"
     proposals_path = _normalize_proposals_path(proposals_path)
-    file_path = "/".join(filter(None, [proposals_path, ticket_key, "prd.md"]))
-
-    gh = GitHubClient()
-    jira = JiraClient()
-    try:
-        fork = await gh.get_or_create_fork(owner, repo)
-        fork_owner = fork["owner"]["login"]
-        fork_repo = fork["name"]
-        default_branch = fork.get("default_branch") or "main"
-        synced = await gh.sync_fork_with_upstream(fork_owner, fork_repo, branch=default_branch)
-        if not synced:
-            raise RuntimeError(
-                f"Could not synchronize proposal fork {fork_owner}/{fork_repo}:"
-                f"{default_branch} with upstream"
-            )
-        await gh.create_branch(fork_owner, fork_repo, branch, base=default_branch)
-        existing_file = await gh.get_file_contents(fork_owner, fork_repo, file_path, branch)
-        await gh.create_or_update_file(
-            owner=fork_owner,
-            repo=fork_repo,
-            path=file_path,
-            content=prd_content,
-            message=f"Add PRD for {ticket_key}",
-            branch=branch,
-            sha=existing_file["sha"] if existing_file else None,
-        )
-        pr_body = (
-            f"**PRD for [{ticket_key}](https://redhat.atlassian.net/browse/{ticket_key})**\n\n"
-            f"The PRD document is in [`{file_path}`](/{file_path}) on this branch.\n\n"
-            "Review the file changes for the latest version. "
-            "Leave comments on this PR to provide feedback — "
-            "Forge will regenerate the PRD and push updated commits."
-        )
-        pr_data = await gh.create_pull_request(
-            owner=owner,
-            repo=repo,
-            title=f"[{ticket_key}] PRD: {summary}",
-            body=pr_body,
-            head=f"{fork_owner}:{branch}",
-            base=default_branch,
-        )
-
-        pr_url = pr_data["html_url"]
-        pr_number = pr_data["number"]
-
-        await set_pr_ticket_index(pr_url, ticket_key)
-        await jira.set_workflow_label(ticket_key, ForgeLabel.PRD_PENDING)
-        await post_status_comment(
-            jira,
-            ticket_key,
-            f"PRD published for review: [GitHub PR]({pr_url})\n\n{pr_interaction_options(pr_url)}",
-        )
-
-        return {
-            "prd_pr_url": pr_url,
-            "prd_pr_number": pr_number,
-            "prd_pr_repo": proposals_repo,
-            "prd_pr_fork_owner": fork_owner,
-            "prd_pr_fork_repo": fork_repo,
-            "prd_pr_branch": branch,
-            "prd_pr_file_path": file_path,
-        }
-    finally:
-        await gh.close()
-        await jira.close()
+    return await create_proposal_pr(
+        artifact=PRD_PROPOSAL,
+        ticket_key=ticket_key,
+        content=prd_content,
+        summary=summary,
+        proposals_repo=proposals_repo,
+        proposals_path=proposals_path,
+    )
 
 
 async def _update_prd_proposal_pr(
@@ -151,37 +95,12 @@ async def _update_prd_proposal_pr(
     state: dict[str, Any],
 ) -> None:
     """Push updated PRD content to the existing proposal PR branch."""
-    upstream_owner, upstream_repo = state["prd_pr_repo"].split("/", 1)
-    owner = state.get("prd_pr_fork_owner") or upstream_owner
-    repo = state.get("prd_pr_fork_repo") or upstream_repo
-    branch = state["prd_pr_branch"]
-    pr_number = state["prd_pr_number"]
-    file_path = state["prd_pr_file_path"]
-
-    gh = GitHubClient()
-    try:
-        file_meta = await gh.get_file_contents(owner, repo, file_path, branch)
-        if not file_meta:
-            logger.warning(f"Could not find PRD file {file_path} on branch {branch}")
-            return
-
-        await gh.create_or_update_file(
-            owner=owner,
-            repo=repo,
-            path=file_path,
-            content=prd_content,
-            message=f"Revise PRD for {ticket_key} based on feedback",
-            branch=branch,
-            sha=file_meta["sha"],
-        )
-        await gh.create_issue_comment(
-            upstream_owner,
-            upstream_repo,
-            pr_number,
-            "PRD has been revised based on feedback. Please review the updated version.",
-        )
-    finally:
-        await gh.close()
+    await update_proposal_pr(
+        artifact=PRD_PROPOSAL,
+        ticket_key=ticket_key,
+        content=prd_content,
+        state=state,
+    )
 
 
 async def generate_prd(state: WorkflowState) -> WorkflowState:

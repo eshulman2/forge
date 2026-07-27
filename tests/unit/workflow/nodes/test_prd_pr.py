@@ -21,6 +21,7 @@ class TestCreatePrdProposalPr:
                 "default_branch": "trunk",
             }
         )
+        mock_gh.get_repository = AsyncMock(return_value={"default_branch": "trunk"})
         mock_gh.sync_fork_with_upstream = AsyncMock(return_value=True)
         mock_gh.get_file_contents = AsyncMock(return_value={"sha": "existing-sha"})
         mock_gh.create_branch = AsyncMock(return_value={"ref": "refs/heads/forge/prd/test-123"})
@@ -39,10 +40,10 @@ class TestCreatePrdProposalPr:
         mock_jira.close = AsyncMock()
 
         with (
-            patch("forge.workflow.nodes.prd_generation.GitHubClient", return_value=mock_gh),
-            patch("forge.workflow.nodes.prd_generation.JiraClient", return_value=mock_jira),
+            patch("forge.workflow.nodes.proposal_pr.GitHubClient", return_value=mock_gh),
+            patch("forge.workflow.nodes.proposal_pr.JiraClient", return_value=mock_jira),
             patch(
-                "forge.workflow.nodes.prd_generation.set_pr_ticket_index",
+                "forge.workflow.nodes.proposal_pr.set_pr_ticket_index",
                 new_callable=AsyncMock,
             ) as mock_index,
         ):
@@ -88,6 +89,8 @@ class TestCreatePrdProposalPr:
         mock_gh.get_or_create_fork = AsyncMock(
             return_value={"owner": {"login": "forge-bot"}, "name": "proposals"}
         )
+        # Omitting a custom default branch exercises the upstream "main" fallback.
+        mock_gh.get_repository = AsyncMock(return_value={})
         mock_gh.sync_fork_with_upstream = AsyncMock(return_value=True)
         mock_gh.get_file_contents = AsyncMock(return_value=None)
         mock_gh.create_branch = AsyncMock(return_value={"ref": "refs/heads/forge/prd/test-456"})
@@ -106,10 +109,10 @@ class TestCreatePrdProposalPr:
         mock_jira.close = AsyncMock()
 
         with (
-            patch("forge.workflow.nodes.prd_generation.GitHubClient", return_value=mock_gh),
-            patch("forge.workflow.nodes.prd_generation.JiraClient", return_value=mock_jira),
+            patch("forge.workflow.nodes.proposal_pr.GitHubClient", return_value=mock_gh),
+            patch("forge.workflow.nodes.proposal_pr.JiraClient", return_value=mock_jira),
             patch(
-                "forge.workflow.nodes.prd_generation.set_pr_ticket_index",
+                "forge.workflow.nodes.proposal_pr.set_pr_ticket_index",
                 new_callable=AsyncMock,
             ),
         ):
@@ -124,6 +127,8 @@ class TestCreatePrdProposalPr:
         assert result["prd_pr_file_path"] == "enhancements/TEST-456/prd.md"
         pr_call_kwargs = mock_gh.create_pull_request.call_args[1]
         assert "enhancements/TEST-456/prd.md" in pr_call_kwargs["body"]
+        assert pr_call_kwargs["base"] == "main"
+        assert mock_gh.create_or_update_file.call_args.kwargs["sha"] is None
 
     @pytest.mark.asyncio
     async def test_stops_when_fork_cannot_be_synchronized(self):
@@ -133,13 +138,14 @@ class TestCreatePrdProposalPr:
         mock_gh.get_or_create_fork = AsyncMock(
             return_value={"owner": {"login": "forge-bot"}, "name": "proposals"}
         )
+        mock_gh.get_repository = AsyncMock(return_value={"default_branch": "main"})
         mock_gh.sync_fork_with_upstream = AsyncMock(return_value=False)
         mock_gh.close = AsyncMock()
         mock_jira = MagicMock(close=AsyncMock())
 
         with (
-            patch("forge.workflow.nodes.prd_generation.GitHubClient", return_value=mock_gh),
-            patch("forge.workflow.nodes.prd_generation.JiraClient", return_value=mock_jira),
+            patch("forge.workflow.nodes.proposal_pr.GitHubClient", return_value=mock_gh),
+            patch("forge.workflow.nodes.proposal_pr.JiraClient", return_value=mock_jira),
             pytest.raises(RuntimeError, match="Could not synchronize proposal fork"),
         ):
             await _create_prd_proposal_pr(
@@ -195,7 +201,7 @@ class TestUpdatePrdProposalPr:
             prd_pr_file_path="TEST-123/prd.md",
         )
 
-        with patch("forge.workflow.nodes.prd_generation.GitHubClient", return_value=mock_gh):
+        with patch("forge.workflow.nodes.proposal_pr.GitHubClient", return_value=mock_gh):
             await _update_prd_proposal_pr(
                 ticket_key="TEST-123",
                 prd_content="# Revised PRD",
@@ -234,7 +240,7 @@ class TestUpdatePrdProposalPr:
             prd_pr_file_path="TEST-LEGACY/prd.md",
         )
 
-        with patch("forge.workflow.nodes.prd_generation.GitHubClient", return_value=mock_gh):
+        with patch("forge.workflow.nodes.proposal_pr.GitHubClient", return_value=mock_gh):
             await _update_prd_proposal_pr("TEST-LEGACY", "# Revised", state)
 
         mock_gh.get_file_contents.assert_awaited_once_with(
