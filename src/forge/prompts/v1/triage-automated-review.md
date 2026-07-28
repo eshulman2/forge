@@ -17,7 +17,8 @@ Rules:
 - `satisfied`: the reviewer clearly accepts or passes the current artifact. Optional,
   important, or suggested improvements accompanying a passing verdict are not blockers.
 - `uncertain`: the review is contradictory, lacks a clear disposition, or you cannot
-  reliably determine whether changes are required.
+  reliably determine whether changes are required. Forge will conservatively revise
+  using the original review, subject to its automated revision limit.
 - Consider the complete review and GitHub review state. Do not decide from isolated
   words such as "pass", "fail", or "first pass".
 - A GitHub `changes_requested` state is strong blocking evidence, but a later review

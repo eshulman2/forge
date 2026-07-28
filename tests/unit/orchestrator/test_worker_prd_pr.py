@@ -362,6 +362,41 @@ class TestHandlePrdPrComment:
         assert result["automated_review_revision_count"] == 1
 
     @pytest.mark.asyncio
+    async def test_uncertain_bot_review_revises_with_original_feedback(self, worker):
+        original_feedback = "The result may still need changes, but the verdict is unclear."
+        msg = _make_message(
+            "issue_comment:created",
+            {
+                "repository": {"full_name": "org/proposals"},
+                "issue": {"number": 7},
+                "comment": {"body": original_feedback},
+                "sender": {"login": "reviewer[bot]", "type": "Bot"},
+            },
+        )
+        state = _prd_gate_state(prd_content="# Current PRD")
+
+        with (
+            patch("forge.orchestrator.worker.GitHubClient") as MockGH,
+            patch(
+                "forge.orchestrator.worker.triage_automated_review",
+                new=AsyncMock(
+                    return_value=AutomatedReviewDecision(
+                        "uncertain", reason="The disposition is contradictory"
+                    )
+                ),
+            ),
+        ):
+            mock_gh = MagicMock()
+            mock_gh.get_authenticated_user = AsyncMock(return_value={"login": "forge-bot"})
+            mock_gh.close = AsyncMock()
+            MockGH.return_value = mock_gh
+            result = await worker._handle_resume_event(msg, state)
+
+        assert result["revision_requested"] is True
+        assert result["feedback_comment"] == original_feedback
+        assert result["automated_review_revision_count"] == 1
+
+    @pytest.mark.asyncio
     async def test_bot_review_at_revision_cap_stays_paused(self, worker):
         msg = _make_message(
             "issue_comment:created",

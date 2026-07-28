@@ -1055,8 +1055,8 @@ class OrchestratorWorker:
 
         # Automated proposal reviewers often publish detailed suggestions even when
         # their overall verdict is satisfied. Semantically triage the complete review
-        # before treating it as a revision request; ambiguous results stay paused for
-        # human judgment instead of silently advancing or starting a revision loop.
+        # before treating it as a revision request. Only a satisfied verdict stops;
+        # ambiguous results retain the original feedback and revise within the cap.
         is_prd_review = self._is_prd_pr_event(message, current_state) and current_node in (
             _PRD_GATE_NODES
         )
@@ -1093,7 +1093,7 @@ class OrchestratorWorker:
                 decision.verdict,
                 decision.reason,
             )
-            if decision.verdict != "blocking":
+            if decision.verdict == "satisfied":
                 return current_state
 
             previous_count = current_state.get("automated_review_revision_count", 0)
@@ -1105,7 +1105,8 @@ class OrchestratorWorker:
                 )
                 return current_state
             automated_review_revision_count = previous_count + 1
-            feedback = decision.blocking_feedback
+            if decision.verdict == "blocking":
+                feedback = decision.blocking_feedback
 
         # GitHub pull_request_review events — handled when paused at human_review_gate or review_response_gate.
         # A review submission is the primary signal for the human review stage.

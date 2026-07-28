@@ -30,7 +30,7 @@ def is_bot_sender(payload: dict) -> bool:
 
 
 def parse_automated_review_decision(output: str) -> AutomatedReviewDecision:
-    """Parse triage output, failing closed to an uncertain human decision."""
+    """Parse triage output, falling back to an uncertain revision decision."""
     match = re.search(r"\{.*\}", output, re.DOTALL)
     if not match:
         return AutomatedReviewDecision("uncertain", reason="Triage returned no JSON object")
