@@ -7,6 +7,7 @@ import pytest
 from forge.models.events import EventSource
 from forge.orchestrator.worker import OrchestratorWorker
 from forge.queue.models import QueueMessage
+from forge.workflow.utils.automated_review_triage import AutomatedReviewDecision
 
 
 def _make_message(event_type: str, payload: dict, ticket_key: str = "TEST-123") -> QueueMessage:
@@ -47,6 +48,7 @@ def worker():
     with patch("forge.orchestrator.worker.get_checkpointer"):
         w = OrchestratorWorker.__new__(OrchestratorWorker)
         w._post_terminal_error_comment = AsyncMock()
+        w._post_resume_ack_comment = AsyncMock()
         return w
 
 
@@ -90,3 +92,33 @@ class TestHandleSpecPrMerge:
         )
         mock_jira.add_structured_comment.assert_not_called()
         mock_jira.add_attachment.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_satisfied_bot_spec_review_stays_paused(worker):
+    msg = _make_message(
+        "issue_comment:created",
+        {
+            "repository": {"full_name": "org/proposals"},
+            "issue": {"number": 12},
+            "comment": {"body": "The specification passes. Optional suggestions follow."},
+            "sender": {"login": "reviewer[bot]", "type": "Bot"},
+        },
+    )
+    state = _spec_gate_state()
+
+    with (
+        patch("forge.orchestrator.worker.GitHubClient") as MockGH,
+        patch(
+            "forge.orchestrator.worker.triage_automated_review",
+            new=AsyncMock(return_value=AutomatedReviewDecision("satisfied")),
+        ) as triage,
+    ):
+        mock_gh = MagicMock()
+        mock_gh.get_authenticated_user = AsyncMock(return_value={"login": "forge-bot"})
+        mock_gh.close = AsyncMock()
+        MockGH.return_value = mock_gh
+        result = await worker._handle_resume_event(msg, state)
+
+    assert result == state
+    triage.assert_awaited_once()
