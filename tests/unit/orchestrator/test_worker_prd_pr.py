@@ -130,7 +130,10 @@ class TestHandlePrdPrMerge:
                 "pull_request": {"number": 7, "merged": True},
             },
         )
-        state = _prd_gate_state()
+        state = _prd_gate_state(
+            automated_review_revision_count=3,
+            automated_review_revision_pending=True,
+        )
 
         with patch("forge.orchestrator.worker.JiraClient") as MockJira:
             mock_jira = MagicMock()
@@ -141,6 +144,8 @@ class TestHandlePrdPrMerge:
             result = await worker._handle_resume_event(msg, state)
 
         assert result["is_paused"] is False
+        assert result["automated_review_revision_count"] == 0
+        assert result["automated_review_revision_pending"] is False
         mock_jira.set_workflow_label.assert_called_once()
 
     @pytest.mark.asyncio

@@ -883,6 +883,7 @@ class OrchestratorWorker:
 
             elif "pull_request" in event and payload.get("pull_request", {}).get("merged") is True:
                 is_approved = True
+                pr_merged = True
                 logger.info(f"PRD PR merged for {message.ticket_key}")
                 jira = JiraClient()
                 try:
@@ -979,6 +980,7 @@ class OrchestratorWorker:
 
             elif "pull_request" in event and payload.get("pull_request", {}).get("merged") is True:
                 is_approved = True
+                pr_merged = True
                 logger.info(f"Spec PR merged for {message.ticket_key}")
                 jira = JiraClient()
                 try:
@@ -1299,6 +1301,11 @@ class OrchestratorWorker:
             updated_state["last_error"] = None
             if pr_merged:
                 updated_state["pr_merged"] = True
+                if is_prd_review:
+                    # Specification review is a separate artifact cycle and must
+                    # receive its own automated revision budget.
+                    updated_state["automated_review_revision_count"] = 0
+                    updated_state["automated_review_revision_pending"] = False
         elif is_question:
             # Unpause so answer_question node runs, it will re-pause after answering
             updated_state["is_paused"] = False
