@@ -368,12 +368,18 @@ async def regenerate_prd_with_feedback(state: WorkflowState) -> WorkflowState:
 
         logger.info(f"PRD regenerated for {ticket_key} ({len(new_prd)} chars)")
 
+        automated_review_revision_count = state.get("automated_review_revision_count", 0)
+        if state.get("automated_review_revision_pending"):
+            automated_review_revision_count += 1
+
         return update_state_timestamp(
             {
                 **state,
                 "prd_content": new_prd,
                 "feedback_comment": None,
                 "revision_requested": False,
+                "automated_review_revision_count": automated_review_revision_count,
+                "automated_review_revision_pending": False,
                 "current_node": "prd_approval_gate",
                 "last_error": None,
             }

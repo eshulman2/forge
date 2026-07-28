@@ -186,9 +186,11 @@ class TestRegeneratePrdWithFeedback:
     @pytest.mark.asyncio
     async def test_clears_feedback_after_regeneration(self, state_with_feedback, mock_jira, mock_agent):
         """Feedback is cleared after regeneration."""
-        with patch("forge.workflow.nodes.prd_generation.JiraClient", return_value=mock_jira):
-            with patch("forge.workflow.nodes.prd_generation.ForgeAgent", return_value=mock_agent):
-                result = await regenerate_prd_with_feedback(state_with_feedback)
+        with (
+            patch("forge.workflow.nodes.prd_generation.JiraClient", return_value=mock_jira),
+            patch("forge.workflow.nodes.prd_generation.ForgeAgent", return_value=mock_agent),
+        ):
+            result = await regenerate_prd_with_feedback(state_with_feedback)
 
         assert result["feedback_comment"] is None
         assert result["revision_requested"] is False
@@ -201,6 +203,22 @@ class TestRegeneratePrdWithFeedback:
                 result = await regenerate_prd_with_feedback(state_with_feedback)
 
         assert result["current_node"] == "prd_approval_gate"
+
+    @pytest.mark.asyncio
+    async def test_counts_completed_automated_revision(
+        self, state_with_feedback, mock_jira, mock_agent
+    ):
+        state_with_feedback["automated_review_revision_count"] = 2
+        state_with_feedback["automated_review_revision_pending"] = True
+
+        with (
+            patch("forge.workflow.nodes.prd_generation.JiraClient", return_value=mock_jira),
+            patch("forge.workflow.nodes.prd_generation.ForgeAgent", return_value=mock_agent),
+        ):
+            result = await regenerate_prd_with_feedback(state_with_feedback)
+
+        assert result["automated_review_revision_count"] == 3
+        assert result["automated_review_revision_pending"] is False
 
     @pytest.mark.asyncio
     async def test_stores_in_comment_when_configured(self, state_with_feedback, mock_jira, mock_agent):

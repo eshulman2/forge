@@ -223,7 +223,10 @@ class TestHandlePrdPrComment:
                 "sender": {"login": "reviewer"},
             },
         )
-        state = _prd_gate_state()
+        state = _prd_gate_state(
+            automated_review_revision_count=2,
+            automated_review_revision_pending=True,
+        )
 
         with patch("forge.orchestrator.worker.GitHubClient") as MockGH:
             mock_gh = MagicMock()
@@ -236,6 +239,8 @@ class TestHandlePrdPrComment:
         assert result["is_paused"] is False
         assert result["revision_requested"] is True
         assert "scope section" in result["feedback_comment"]
+        assert result["automated_review_revision_count"] == 0
+        assert result["automated_review_revision_pending"] is False
 
     @pytest.mark.asyncio
     async def test_self_comment_is_ignored(self, worker):
@@ -359,7 +364,8 @@ class TestHandlePrdPrComment:
 
         assert result["revision_requested"] is True
         assert result["feedback_comment"] == "Add the missing authorization requirement."
-        assert result["automated_review_revision_count"] == 1
+        assert result.get("automated_review_revision_count", 0) == 0
+        assert result["automated_review_revision_pending"] is True
 
     @pytest.mark.asyncio
     async def test_uncertain_bot_review_revises_with_original_feedback(self, worker):
@@ -394,7 +400,8 @@ class TestHandlePrdPrComment:
 
         assert result["revision_requested"] is True
         assert result["feedback_comment"] == original_feedback
-        assert result["automated_review_revision_count"] == 1
+        assert result.get("automated_review_revision_count", 0) == 0
+        assert result["automated_review_revision_pending"] is True
 
     @pytest.mark.asyncio
     async def test_bot_review_at_revision_cap_stays_paused(self, worker):

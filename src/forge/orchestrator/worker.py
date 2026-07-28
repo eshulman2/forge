@@ -470,7 +470,7 @@ class OrchestratorWorker:
         is_yolo = False
         pr_merged = False
         feedback = None
-        automated_review_revision_count = None
+        automated_review_revision_pending = None
 
         current_node = current_state.get("current_node", "")
 
@@ -1104,7 +1104,7 @@ class OrchestratorWorker:
                     message.ticket_key,
                 )
                 return current_state
-            automated_review_revision_count = previous_count + 1
+            automated_review_revision_pending = True
             if decision.verdict == "blocking":
                 feedback = decision.blocking_feedback
 
@@ -1315,8 +1315,13 @@ class OrchestratorWorker:
             updated_state["is_paused"] = False
             updated_state["revision_requested"] = True
             updated_state["feedback_comment"] = feedback
-            if automated_review_revision_count is not None:
-                updated_state["automated_review_revision_count"] = automated_review_revision_count
+            if automated_review_revision_pending is not None:
+                updated_state["automated_review_revision_pending"] = True
+            elif is_prd_review or is_spec_review:
+                # A human-requested proposal revision starts a fresh automated
+                # review cycle after that revision is published.
+                updated_state["automated_review_revision_count"] = 0
+                updated_state["automated_review_revision_pending"] = False
             if current_node == "review_response_gate":
                 updated_state["contested_comments"] = []
             if comment_ticket_key and comment_ticket_type == "epic":

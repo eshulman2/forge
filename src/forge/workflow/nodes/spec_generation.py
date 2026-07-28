@@ -358,12 +358,18 @@ async def regenerate_spec_with_feedback(state: WorkflowState) -> WorkflowState:
 
         logger.info(f"Spec regenerated for {ticket_key} ({len(new_spec)} chars)")
 
+        automated_review_revision_count = state.get("automated_review_revision_count", 0)
+        if state.get("automated_review_revision_pending"):
+            automated_review_revision_count += 1
+
         return update_state_timestamp(
             {
                 **state,
                 "spec_content": new_spec,
                 "feedback_comment": None,
                 "revision_requested": False,
+                "automated_review_revision_count": automated_review_revision_count,
+                "automated_review_revision_pending": False,
                 "current_node": "spec_approval_gate",
                 "last_error": None,
             }
