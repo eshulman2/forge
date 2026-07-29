@@ -177,9 +177,7 @@ async def _reply_to_review_threads(
             if not isinstance(comment_id, int) or not response:
                 continue
             try:
-                await github.reply_to_review_comment(
-                    owner, repo, pr_number, comment_id, response
-                )
+                await github.reply_to_review_comment(owner, repo, pr_number, comment_id, response)
             except Exception as exc:
                 logger.warning("Failed replying to review comment %s: %s", comment_id, exc)
     finally:
@@ -248,8 +246,7 @@ async def implement_review(state: WorkflowState) -> WorkflowState:
             processed_thread_ids={
                 item["thread_id"]
                 for item in state.get("review_comments", [])
-                if item.get("disposition") in ("accept", "ignore")
-                and item.get("thread_id")
+                if item.get("disposition") in ("accept", "ignore") and item.get("thread_id")
             },
         )
 
@@ -283,9 +280,7 @@ async def implement_review(state: WorkflowState) -> WorkflowState:
         # ── Process per-thread dispositions ──────────────────────────────────
         decisions = _load_review_decisions(workspace_path)
         response_decisions = [
-            item
-            for item in decisions
-            if item["disposition"] in ("contest", "clarify", "ignore")
+            item for item in decisions if item["disposition"] in ("contest", "clarify", "ignore")
         ]
         contested_comments = [
             item for item in decisions if item["disposition"] in ("contest", "clarify")

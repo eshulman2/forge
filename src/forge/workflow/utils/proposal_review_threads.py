@@ -110,9 +110,7 @@ async def reply_to_proposal_decisions(
             if not isinstance(comment_id, int) or not response:
                 continue
             try:
-                await github.reply_to_review_comment(
-                    owner, repo, pr_number, comment_id, response
-                )
+                await github.reply_to_review_comment(owner, repo, pr_number, comment_id, response)
             except Exception as exc:
                 logger.warning("Failed replying to proposal comment %s: %s", comment_id, exc)
     finally:

@@ -502,9 +502,7 @@ class OrchestratorWorker:
                     logger.debug("Ignoring Forge's own inline review reply")
                     return current_state
                 contested = current_state.get("contested_comments", [])
-                remaining = [
-                    item for item in contested if item.get("comment_id") != replied_to
-                ]
+                remaining = [item for item in contested if item.get("comment_id") != replied_to]
                 return {
                     **current_state,
                     "is_paused": False,
@@ -877,13 +875,14 @@ class OrchestratorWorker:
 
         # A human reply to a proposal review thread resumes only that thread's
         # feedback. Forge-authored replies are informational and must not loop.
-        if message.source == EventSource.GITHUB and "pull_request_review_comment" in message.event_type:
+        if (
+            message.source == EventSource.GITHUB
+            and "pull_request_review_comment" in message.event_type
+        ):
             is_proposal_reply = (
-                self._is_prd_pr_event(message, current_state)
-                and current_node in _PRD_GATE_NODES
+                self._is_prd_pr_event(message, current_state) and current_node in _PRD_GATE_NODES
             ) or (
-                self._is_spec_pr_event(message, current_state)
-                and current_node in _SPEC_GATE_NODES
+                self._is_spec_pr_event(message, current_state) and current_node in _SPEC_GATE_NODES
             )
             reply = payload.get("comment", {})
             replied_to = reply.get("in_reply_to_id")
@@ -945,10 +944,8 @@ class OrchestratorWorker:
                         _owner, _repo = repo_full.split("/", 1)
                         gh = GitHubClient()
                         try:
-                            proposal_review_threads = (
-                                await gh.get_pull_request_review_threads(
-                                    _owner, _repo, pr_number
-                                )
+                            proposal_review_threads = await gh.get_pull_request_review_threads(
+                                _owner, _repo, pr_number
                             )
                             inline_comments = [
                                 {
@@ -1052,10 +1049,8 @@ class OrchestratorWorker:
                         _owner, _repo = repo_full.split("/", 1)
                         gh = GitHubClient()
                         try:
-                            proposal_review_threads = (
-                                await gh.get_pull_request_review_threads(
-                                    _owner, _repo, pr_number
-                                )
+                            proposal_review_threads = await gh.get_pull_request_review_threads(
+                                _owner, _repo, pr_number
                             )
                             inline_comments = [
                                 {
@@ -1225,9 +1220,7 @@ class OrchestratorWorker:
                 feedback = "\n\n".join(item for item in actionable_feedback if item)
                 if not feedback:
                     merged = {**previous_decisions}
-                    merged.update(
-                        {item["thread_id"]: item for item in proposal_review_decisions}
-                    )
+                    merged.update({item["thread_id"]: item for item in proposal_review_decisions})
                     return {
                         **current_state,
                         "proposal_review_decisions": list(merged.values()),
@@ -1504,9 +1497,7 @@ class OrchestratorWorker:
                     for item in current_state.get("proposal_review_decisions", [])
                     if item.get("thread_id")
                 }
-                previous.update(
-                    {item["thread_id"]: item for item in proposal_review_decisions}
-                )
+                previous.update({item["thread_id"]: item for item in proposal_review_decisions})
                 updated_state["proposal_review_decisions"] = list(previous.values())
             if automated_review_revision_pending is not None:
                 updated_state["automated_review_revision_pending"] = True
