@@ -41,6 +41,7 @@ from forge.workflow.utils.proposal_review_threads import (
     reply_to_proposal_decisions,
     triage_proposal_review_threads,
 )
+from forge.workflow.utils.review_decisions import merge_review_decisions
 
 logger = logging.getLogger(__name__)
 
@@ -1267,11 +1268,12 @@ class OrchestratorWorker:
                 ]
                 feedback = "\n\n".join(item for item in actionable_feedback if item)
                 if not feedback:
-                    merged = {**previous_decisions}
-                    merged.update({item["thread_id"]: item for item in proposal_review_decisions})
                     return {
                         **current_state,
-                        "proposal_review_decisions": list(merged.values()),
+                        "proposal_review_decisions": merge_review_decisions(
+                            current_state.get("proposal_review_decisions", []),
+                            proposal_review_decisions,
+                        ),
                     }
 
         if (
@@ -1540,13 +1542,10 @@ class OrchestratorWorker:
             updated_state["revision_requested"] = True
             updated_state["feedback_comment"] = feedback
             if proposal_review_decisions:
-                previous = {
-                    item.get("thread_id"): item
-                    for item in current_state.get("proposal_review_decisions", [])
-                    if item.get("thread_id")
-                }
-                previous.update({item["thread_id"]: item for item in proposal_review_decisions})
-                updated_state["proposal_review_decisions"] = list(previous.values())
+                updated_state["proposal_review_decisions"] = merge_review_decisions(
+                    current_state.get("proposal_review_decisions", []),
+                    proposal_review_decisions,
+                )
             if automated_review_revision_pending is not None:
                 updated_state["automated_review_revision_pending"] = True
             elif is_prd_review or is_spec_review:

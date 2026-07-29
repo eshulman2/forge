@@ -1,10 +1,11 @@
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from forge.workflow.utils.proposal_review_threads import (
     parse_proposal_thread_decisions,
     reply_to_proposal_decisions,
+    triage_proposal_review_threads,
 )
 
 
@@ -59,3 +60,32 @@ async def test_reply_skips_missing_repo_coordinates() -> None:
         )
 
     github.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_triage_records_each_decision_for_monitoring() -> None:
+    agent = MagicMock()
+    agent.run_task = AsyncMock(
+        return_value=(
+            '[{"thread_id":"thread-1","comment_id":101,"disposition":"accept",'
+            '"feedback":"Clarify authorization.","response":"","reason":"Valid"},'
+            '{"thread_id":"thread-2","comment_id":202,"disposition":"reply",'
+            '"feedback":"","response":"No.","reason":"Invalid"}]'
+        )
+    )
+
+    with (
+        patch("forge.integrations.agents.agent.ForgeAgent", return_value=agent),
+        patch(
+            "forge.workflow.utils.proposal_review_threads.record_proposal_review_decision"
+        ) as record,
+    ):
+        await triage_proposal_review_threads(
+            artifact_type="PRD",
+            artifact_content="# PRD",
+            threads=_threads(),
+            ticket_key="TEST-233",
+        )
+
+    assert record.call_args_list[0].args == ("prd", "accept")
+    assert record.call_args_list[1].args == ("prd", "reply")

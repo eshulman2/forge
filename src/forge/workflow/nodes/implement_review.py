@@ -17,6 +17,7 @@ from forge.workflow.nodes.code_review import run_post_change_review, sync_pr_des
 from forge.workflow.nodes.workspace_setup import prepare_workspace
 from forge.workflow.utils import set_paused, update_state_timestamp
 from forge.workflow.utils.jira_status import post_status_comment
+from forge.workflow.utils.review_decisions import merge_review_decisions
 
 logger = logging.getLogger(__name__)
 
@@ -148,19 +149,6 @@ def _load_review_decisions(workspace_path: str) -> list[dict[str, Any]]:
         and item.get("disposition") in allowed
         and isinstance(item.get("thread_id"), str)
     ]
-
-
-def _merge_review_decisions(
-    previous: list[dict[str, Any]], current: list[dict[str, Any]]
-) -> list[dict[str, Any]]:
-    """Keep the latest decision per thread while retaining processed history."""
-    merged = {
-        item["thread_id"]: item
-        for item in previous
-        if isinstance(item, dict) and item.get("thread_id")
-    }
-    merged.update({item["thread_id"]: item for item in current})
-    return list(merged.values())
 
 
 async def _reply_to_review_threads(
@@ -404,7 +392,7 @@ async def implement_review(state: WorkflowState) -> WorkflowState:
                 **state,
                 "revision_requested": False,
                 "feedback_comment": None,
-                "review_comments": _merge_review_decisions(
+                "review_comments": merge_review_decisions(
                     state.get("review_comments", []), decisions
                 ),
                 "review_response_posted": bool(contested_comments),

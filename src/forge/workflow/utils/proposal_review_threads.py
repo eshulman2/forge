@@ -5,6 +5,7 @@ import logging
 import re
 from typing import Any
 
+from forge.api.routes.metrics import record_proposal_review_decision
 from forge.prompts import load_prompt
 
 logger = logging.getLogger(__name__)
@@ -83,7 +84,17 @@ async def triage_proposal_review_threads(
     except Exception as exc:
         logger.warning("Proposal thread triage failed for %s: %s", ticket_key, exc)
         output = ""
-    return parse_proposal_thread_decisions(output, threads)
+    decisions = parse_proposal_thread_decisions(output, threads)
+    for decision in decisions:
+        record_proposal_review_decision(artifact_type.lower(), decision["disposition"])
+        logger.info(
+            "Proposal review decision for %s thread %s: %s (%s)",
+            artifact_type,
+            decision["thread_id"],
+            decision["disposition"],
+            decision.get("reason", ""),
+        )
+    return decisions
 
 
 async def reply_to_proposal_decisions(

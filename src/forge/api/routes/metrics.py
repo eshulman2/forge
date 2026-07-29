@@ -62,6 +62,12 @@ REVISIONS_REQUESTED = Counter(
     ["stage"],  # prd, spec, plan
 )
 
+PROPOSAL_REVIEW_DECISIONS = Counter(
+    "forge_proposal_review_decisions_total",
+    "Proposal review thread decisions by artifact type and disposition",
+    ["artifact_type", "disposition"],
+)
+
 # CI/CD metrics
 CI_FIX_ATTEMPTS = Counter(
     "forge_ci_fix_attempts_total",
@@ -200,6 +206,14 @@ def record_approval(stage: str) -> None:
 def record_revision_requested(stage: str) -> None:
     """Record a revision request for a stage (prd, spec, plan)."""
     REVISIONS_REQUESTED.labels(stage=stage).inc()
+
+
+def record_proposal_review_decision(artifact_type: str, disposition: str) -> None:
+    """Record one semantic proposal-review thread decision."""
+    PROPOSAL_REVIEW_DECISIONS.labels(
+        artifact_type=artifact_type,
+        disposition=disposition,
+    ).inc()
 
 
 def observe_phase_duration(phase: str, duration: float) -> None:
