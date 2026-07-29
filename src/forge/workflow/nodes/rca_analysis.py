@@ -47,6 +47,7 @@ async def analyze_bug(state: BugState) -> BugState:
     ticket_key = state["ticket_key"]
     retry_count = state.get("retry_count", 0)
     reflection_critique = state.get("reflection_critique") or ""
+    user_revision_feedback = state.get("user_revision_feedback") or ""
 
     settings = get_settings()
     jira = JiraClient()
@@ -93,6 +94,7 @@ async def analyze_bug(state: BugState) -> BugState:
             bug_description=issue.description or "",
             known_repos="\n".join(repos),
             reflection_critique=reflection_critique,
+            user_revision_feedback=user_revision_feedback,
         )
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -117,6 +119,8 @@ async def analyze_bug(state: BugState) -> BugState:
             {
                 **state,
                 "rca_options": data["options"],
+                "rca_data": data,
+                "rca_repos": repos,
                 "rca_content": _format_rca_content(data),
                 "reproducibility_assessment": _format_reproducibility(data),
                 "current_node": "reflect_rca",
@@ -227,6 +231,8 @@ async def reflect_rca(state: BugState) -> BugState:
     ticket_key = state["ticket_key"]
     rca_content = state.get("rca_content") or ""
     rca_options = state.get("rca_options") or []
+    rca_data = state.get("rca_data") or {}
+    rca_repos = state.get("rca_repos") or []
     reflection_count = state.get("reflection_count", 0)
     reflect_rca_retry_count = state.get("reflect_rca_retry_count", 0)
 
@@ -238,6 +244,8 @@ async def reflect_rca(state: BugState) -> BugState:
             "reflect-rca",
             rca_content=rca_content,
             rca_options_json=json.dumps(rca_options, indent=2),
+            rca_json=json.dumps(rca_data, indent=2),
+            known_repos="\n".join(rca_repos),
         )
 
         with tempfile.TemporaryDirectory() as tmpdir:

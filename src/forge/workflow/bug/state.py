@@ -37,6 +37,9 @@ class BugState(
     # Analysis / reflection loop
     reflection_count: int
     reflection_critique: str | None
+    user_revision_feedback: str | None
+    rca_data: dict[str, Any] | None
+    rca_repos: list[str]
     rca_options: list[dict]  # [{title, description, tradeoffs}, ...]
     reproducibility_assessment: str | None
 
@@ -121,6 +124,9 @@ def create_initial_bug_state(ticket_key: str, **kwargs: Any) -> BugState:
         # Analysis / reflection loop
         "reflection_count": 0,
         "reflection_critique": None,
+        "user_revision_feedback": None,
+        "rca_data": None,
+        "rca_repos": [],
         "rca_options": [],
         "reproducibility_assessment": None,
         # Option selection

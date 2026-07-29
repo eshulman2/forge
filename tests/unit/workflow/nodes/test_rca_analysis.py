@@ -23,6 +23,9 @@ def base_bug_state():
         "rca_options": [],
         "reflection_count": 0,
         "reflection_critique": None,
+        "user_revision_feedback": None,
+        "rca_data": None,
+        "rca_repos": [],
         "reproducibility_assessment": None,
         "triage_passed": True,
         "triage_missing_fields": [],
@@ -179,6 +182,33 @@ class TestAnalyzeBug:
         assert "Missing hypothesis log entries." in captured_desc[0]
 
     @pytest.mark.asyncio
+    async def test_user_revision_feedback_is_preserved_in_every_analysis_prompt(
+        self, base_bug_state
+    ):
+        base_bug_state["user_revision_feedback"] = "Add multipart reply handling."
+        base_bug_state["reflection_critique"] = "Verify the commit hash."
+        mock_jira = _make_mock_jira()
+        captured_desc = []
+
+        class _CapturingRunner:
+            async def run(self, workspace_path, task_description="", **_kwargs):
+                captured_desc.append(task_description)
+                forge_dir = workspace_path / ".forge"
+                forge_dir.mkdir(exist_ok=True)
+                (forge_dir / "rca.json").write_text(json.dumps(SAMPLE_RCA_JSON))
+                return MagicMock(success=True, exit_code=0, stdout="Done", stderr="")
+
+        with (
+            patch("forge.workflow.nodes.rca_analysis.JiraClient", return_value=mock_jira),
+            patch("forge.workflow.nodes.rca_analysis.ContainerRunner", return_value=_CapturingRunner()),
+        ):
+            result = await analyze_bug(base_bug_state)
+
+        assert "Add multipart reply handling." in captured_desc[0]
+        assert "Verify the commit hash." in captured_desc[0]
+        assert result["user_revision_feedback"] == "Add multipart reply handling."
+
+    @pytest.mark.asyncio
     async def test_container_success_parses_rca_json_into_state(self, base_bug_state):
         """On success, rca_options and rca_content are populated from rca.json."""
         mock_jira = _make_mock_jira()
@@ -191,6 +221,8 @@ class TestAnalyzeBug:
             result = await analyze_bug(base_bug_state)
 
         assert result["rca_options"] == SAMPLE_RCA_JSON["options"]
+        assert result["rca_data"] == SAMPLE_RCA_JSON
+        assert result["rca_repos"] == ["acme/backend"]
         assert result["rca_content"] is not None
         assert len(result["rca_content"]) > 0
 
@@ -359,6 +391,29 @@ class TestReflectRca:
         assert captured_desc, "runner.run was not called"
         # rca_content and options should be in the task description
         assert "Root Cause" in captured_desc[0] or "rca" in captured_desc[0].lower()
+
+    @pytest.mark.asyncio
+    async def test_reviewer_receives_structured_artifact_and_repositories(self, rca_state):
+        rca_state["rca_data"] = SAMPLE_RCA_JSON
+        rca_state["rca_repos"] = ["acme/backend"]
+        mock_jira = _make_mock_jira()
+        captured_desc = []
+
+        class _CapturingRunner:
+            async def run(self, workspace_path, task_description="", **_kwargs):
+                del workspace_path
+                captured_desc.append(task_description)
+                return MagicMock(success=True, exit_code=0, stdout="VALID", stderr="")
+
+        with (
+            patch("forge.workflow.nodes.rca_analysis.JiraClient", return_value=mock_jira),
+            patch("forge.workflow.nodes.rca_analysis.ContainerRunner", return_value=_CapturingRunner()),
+        ):
+            await reflect_rca(rca_state)
+
+        assert '"hypothesis_log"' in captured_desc[0]
+        assert '"introduced_in"' in captured_desc[0]
+        assert "acme/backend" in captured_desc[0]
 
     @pytest.mark.asyncio
     async def test_valid_output_routes_to_rca_option_gate(self, rca_state):

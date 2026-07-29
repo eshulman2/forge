@@ -32,6 +32,7 @@ def make_rca_option_state(**overrides) -> dict:
         ],
         "reflection_count": 0,
         "reflection_critique": None,
+        "user_revision_feedback": None,
         "retry_count": 0,
         "last_error": None,
     }
@@ -229,12 +230,13 @@ class TestRegenerateRca:
         assert result["current_node"] == "analyze_bug"
 
     @pytest.mark.asyncio
-    async def test_sets_reflection_critique_to_feedback(self, regen_state, mock_jira):
-        """regenerate_rca passes user feedback directly as reflection_critique."""
+    async def test_stores_user_feedback_separately(self, regen_state, mock_jira):
+        """User feedback remains distinct from machine reviewer critique."""
         with patch("forge.workflow.nodes.rca_option_gate.JiraClient", return_value=mock_jira):
             result = await regenerate_rca(regen_state)
 
-        assert result["reflection_critique"] == self.FEEDBACK
+        assert result["user_revision_feedback"] == self.FEEDBACK
+        assert result["reflection_critique"] is None
 
     @pytest.mark.asyncio
     async def test_clears_feedback_and_revision_flags(self, regen_state, mock_jira):

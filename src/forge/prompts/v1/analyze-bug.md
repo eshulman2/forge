@@ -14,11 +14,16 @@ Clone the primary repository first. If the bug plausibly spans multiple repos, c
 
 {known_repos}
 
-## Previous Critique or User Feedback
+## User Revision Feedback
 
-If content is provided below, it is either a machine reflection critique identifying gaps in the
-previous analysis, or direct user feedback requesting changes. Address all points before writing
-rca.json.
+The following feedback came directly from the user. It is authoritative revision input and must be
+addressed on every attempt. Do not discard it when also addressing reviewer feedback.
+
+{user_revision_feedback}
+
+## Previous Reviewer Critique
+
+Address all points below before writing rca.json.
 
 {reflection_critique}
 

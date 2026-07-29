@@ -156,11 +156,10 @@ def route_rca_option(state: BugState) -> str:
 
 
 async def regenerate_rca(state: BugState) -> BugState:
-    """Route back to analyze_bug with user feedback as the reflection critique.
+    """Route back to analyze_bug while preserving user revision feedback.
 
-    Passes the user's feedback comment directly as reflection_critique so that
-    the next analyze_bug container run addresses it. No agent or container is
-    needed here — analyze_bug already does all the investigation.
+    Stores the user's feedback separately from the machine reflection critique
+    so it remains available throughout every regeneration attempt.
 
     Also resets reflection_count and retry_count so the new analysis gets a
     fresh reflection loop, and clears is_paused which was set by rca_option_gate.
@@ -170,8 +169,7 @@ async def regenerate_rca(state: BugState) -> BugState:
                and feedback_comment containing user feedback.
 
     Returns:
-        Updated state with current_node="analyze_bug" and reflection_critique
-        set to the user's feedback.
+        Updated state with current_node="analyze_bug" and durable user feedback.
     """
     ticket_key = state["ticket_key"]
     feedback = state.get("feedback_comment") or ""
@@ -191,7 +189,8 @@ async def regenerate_rca(state: BugState) -> BugState:
     return update_state_timestamp(
         {
             **state,
-            "reflection_critique": feedback or None,
+            "user_revision_feedback": feedback or None,
+            "reflection_critique": None,
             "feedback_comment": None,
             "revision_requested": False,
             "selected_fix_option": None,
