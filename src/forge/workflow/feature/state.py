@@ -58,6 +58,7 @@ class FeatureState(
     # Automated proposal review loop protection
     automated_review_revision_count: int
     automated_review_revision_pending: bool
+    proposal_review_decisions: list[dict[str, Any]]
 
     # Spec PR tracking (enhancement proposal flow)
     spec_pr_url: str | None
@@ -144,6 +145,7 @@ def create_initial_feature_state(ticket_key: str, **kwargs: Any) -> FeatureState
         "prd_pr_file_path": None,
         "automated_review_revision_count": 0,
         "automated_review_revision_pending": False,
+        "proposal_review_decisions": [],
         "spec_pr_url": None,
         "spec_pr_number": None,
         "spec_pr_repo": None,

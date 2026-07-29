@@ -1324,6 +1324,49 @@ class TestHandleResumeEventReviewGates:
     """Tests for resuming workflows from human_review_gate and review_response_gate."""
 
     @pytest.mark.asyncio
+    async def test_inline_reply_resumes_only_its_contested_thread(self):
+        worker = OrchestratorWorker(consumer_name="test-worker")
+        state = {
+            "ticket_key": "TEST-233",
+            "current_node": "review_response_gate",
+            "is_paused": True,
+            "contested_comments": [
+                {"thread_id": "thread-a", "comment_id": 10},
+                {"thread_id": "thread-b", "comment_id": 20},
+            ],
+            "context": {},
+        }
+        message = QueueMessage(
+            message_id="msg-thread-reply",
+            event_id="evt-thread-reply",
+            source=EventSource.GITHUB,
+            event_type="pull_request_review_comment:created",
+            ticket_key="TEST-233",
+            payload={
+                "comment": {
+                    "id": 11,
+                    "in_reply_to_id": 10,
+                    "body": "Please make this change after all.",
+                },
+                "pull_request": {"number": 42},
+                "repository": {"full_name": "owner/repo"},
+                "sender": {"login": "reviewer"},
+            },
+        )
+
+        mock_github = AsyncMock()
+        mock_github.get_authenticated_user.return_value = {"login": "forge-bot"}
+        with patch("forge.orchestrator.worker.GitHubClient", return_value=mock_github):
+            result = await worker._handle_resume_event(message, state)
+
+        assert result["is_paused"] is False
+        assert result["revision_requested"] is True
+        assert result["feedback_comment"] == "Please make this change after all."
+        assert result["contested_comments"] == [
+            {"thread_id": "thread-b", "comment_id": 20}
+        ]
+
+    @pytest.mark.asyncio
     @patch("forge.orchestrator.worker.post_status_comment", new_callable=AsyncMock)
     @patch("forge.orchestrator.worker.GitHubClient")
     async def test_handle_resume_event_pr_review_at_review_response_gate(

@@ -198,6 +198,111 @@ class GitHubClient:
         logger.info(f"Created review comment on PR #{pr_number}")
         return response.json()
 
+    async def reply_to_review_comment(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        comment_id: int,
+        body: str,
+    ) -> dict[str, Any]:
+        """Reply in the review thread containing ``comment_id``."""
+        client = await self._get_client()
+        response = await client.post(
+            f"/repos/{owner}/{repo}/pulls/{pr_number}/comments/{comment_id}/replies",
+            json={"body": body},
+        )
+        response.raise_for_status()
+        logger.info("Replied to review comment %s on PR #%s", comment_id, pr_number)
+        return response.json()
+
+    async def get_pull_request_review_threads(
+        self, owner: str, repo: str, pr_number: int
+    ) -> list[dict[str, Any]]:
+        """Return unresolved review threads while preserving thread identity."""
+        query = """
+        query($owner: String!, $repo: String!, $prNumber: Int!) {
+          repository(owner: $owner, name: $repo) {
+            pullRequest(number: $prNumber) {
+              reviewThreads(first: 100) {
+                nodes {
+                  id
+                  isResolved
+                  isOutdated
+                  path
+                  line
+                  originalLine
+                  comments(first: 50) {
+                    nodes {
+                      id
+                      databaseId
+                      path
+                      line
+                      originalLine
+                      body
+                      createdAt
+                      author { login }
+                      commit { oid }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+        """
+        client = await self._get_client()
+        response = await client.post(
+            "/graphql",
+            json={
+                "query": query,
+                "variables": {"owner": owner, "repo": repo, "prNumber": pr_number},
+            },
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if payload.get("errors"):
+            raise RuntimeError(f"GitHub GraphQL errors: {payload['errors']}")
+
+        nodes = (
+            payload.get("data", {})
+            .get("repository", {})
+            .get("pullRequest", {})
+            .get("reviewThreads", {})
+            .get("nodes", [])
+        )
+        threads = []
+        for thread in nodes:
+            if thread.get("isResolved") or thread.get("isOutdated"):
+                continue
+            comments = thread.get("comments", {}).get("nodes", [])
+            if not comments:
+                continue
+            threads.append(
+                {
+                    "thread_id": thread.get("id", ""),
+                    "path": thread.get("path") or comments[0].get("path", ""),
+                    "line": thread.get("line")
+                    or thread.get("originalLine")
+                    or comments[0].get("line")
+                    or comments[0].get("originalLine"),
+                    "is_resolved": False,
+                    "is_outdated": False,
+                    "comments": [
+                        {
+                            "node_id": comment.get("id", ""),
+                            "comment_id": comment.get("databaseId"),
+                            "body": comment.get("body", ""),
+                            "author": (comment.get("author") or {}).get("login", ""),
+                            "created_at": comment.get("createdAt", ""),
+                            "commit_sha": (comment.get("commit") or {}).get("oid", ""),
+                        }
+                        for comment in comments
+                    ],
+                }
+            )
+        return threads
+
     async def get_pull_request_review_comments(
         self, owner: str, repo: str, pr_number: int
     ) -> list[dict[str, Any]]:
@@ -217,63 +322,19 @@ class GitHubClient:
             List of comment dicts with path, position, and body, from
             unresolved threads only.
         """
-        query = """
-        query($owner: String!, $repo: String!, $prNumber: Int!) {
-          repository(owner: $owner, name: $repo) {
-            pullRequest(number: $prNumber) {
-              reviewThreads(first: 100) {
-                nodes {
-                  isResolved
-                  isOutdated
-                  comments(first: 50) {
-                    nodes {
-                      path
-                      line
-                      originalLine
-                      body
-                      author { login }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-        """
         try:
-            client = await self._get_client()
-            response = await client.post(
-                "/graphql",
-                json={
-                    "query": query,
-                    "variables": {
-                        "owner": owner,
-                        "repo": repo,
-                        "prNumber": pr_number,
-                    },
-                },
-            )
-            response.raise_for_status()
-            data = response.json()
-
-            threads = (
-                data.get("data", {})
-                .get("repository", {})
-                .get("pullRequest", {})
-                .get("reviewThreads", {})
-                .get("nodes", [])
-            )
-
-            comments = []
+            threads = await self.get_pull_request_review_threads(owner, repo, pr_number)
+            comments: list[dict[str, Any]] = []
             for thread in threads:
-                if thread.get("isResolved") or thread.get("isOutdated"):
-                    continue
-                for comment in thread.get("comments", {}).get("nodes", []):
+                for comment in thread["comments"]:
                     comments.append(
                         {
-                            "path": comment.get("path", ""),
-                            "position": comment.get("line") or comment.get("originalLine"),
+                            "thread_id": thread["thread_id"],
+                            "comment_id": comment["comment_id"],
+                            "path": thread["path"],
+                            "position": thread["line"],
                             "body": comment.get("body", ""),
+                            "author": comment.get("author", ""),
                         }
                     )
             return comments

@@ -109,8 +109,8 @@ def parse_github_webhook(
             pr = pull_requests[0]
             pr_number = pr.get("number")
 
-    # Handle pull_request_review events
-    elif event_type == "pull_request_review":
+    # Handle pull request review submissions and inline thread replies
+    elif event_type in ("pull_request_review", "pull_request_review_comment"):
         pr = payload.get("pull_request", {})
         pr_number = pr.get("number")
         pr_url = pr.get("html_url")

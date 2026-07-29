@@ -137,18 +137,19 @@ def validate_github_payload(
                 error_field="check_suite",
             )
 
-    elif event_type == "pull_request_review":
+    elif event_type in ("pull_request_review", "pull_request_review_comment"):
         if "pull_request" not in payload:
             return ValidationResult(
                 is_valid=False,
                 error_message="Missing pull_request data for review event",
                 error_field="pull_request",
             )
-        if "review" not in payload:
+        required_key = "review" if event_type == "pull_request_review" else "comment"
+        if required_key not in payload:
             return ValidationResult(
                 is_valid=False,
-                error_message="Missing review data for review event",
-                error_field="review",
+                error_message=f"Missing {required_key} data for review event",
+                error_field=required_key,
             )
 
     # Check for sender

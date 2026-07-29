@@ -1,5 +1,6 @@
 """Tests for the implement_review node and review_response_gate (proposal 007)."""
 
+import json
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -325,6 +326,97 @@ class TestImplementReviewStatusComment:
             )
 
         mock_github.create_issue_comment.assert_not_called()
+
+
+class TestThreadAwareReviewHandling:
+    @pytest.mark.asyncio
+    async def test_contested_thread_does_not_block_accepted_plan(self, tmp_path):
+        from forge.workflow.nodes.implement_review import implement_review
+
+        decisions = [
+            {
+                "thread_id": "accepted-thread",
+                "comment_id": 10,
+                "disposition": "accept",
+                "feedback": "Handle the empty case.",
+                "reason": "Valid edge case",
+                "response": "",
+            },
+            {
+                "thread_id": "contested-thread",
+                "comment_id": 20,
+                "disposition": "contest",
+                "feedback": "",
+                "reason": "Conflicts with the public API",
+                "response": "This conflicts with the documented public API. Can you confirm?",
+            },
+        ]
+
+        async def run_container(**_kwargs):
+            if not (tmp_path / ".forge" / "review-decisions.json").exists():
+                (tmp_path / ".forge" / "review-decisions.json").write_text(
+                    json.dumps(decisions)
+                )
+                (tmp_path / ".forge" / "review-plan.md").write_text(
+                    "# Plan\n\nImplement accepted-thread."
+                )
+
+        mock_runner = MagicMock()
+        mock_runner.run = AsyncMock(side_effect=run_container)
+        mock_git = MagicMock()
+        mock_git.has_uncommitted_changes.return_value = False
+        mock_git._run_git.return_value = MagicMock(stdout="")
+        state = make_workflow_state(
+            ticket_key="TEST-233",
+            current_node="implement_review",
+            workspace_path=str(tmp_path),
+            current_repo="org/repo",
+            current_pr_number=9,
+            feedback_comment="Mixed review",
+            context={"branch_name": "forge/TEST-233"},
+        )
+
+        with (
+            patch(
+                "forge.workflow.nodes.implement_review.prepare_workspace",
+                return_value=(str(tmp_path), mock_git),
+            ),
+            patch(
+                "forge.workflow.nodes.implement_review._fetch_pr_review_comments",
+                new=AsyncMock(return_value="# Review"),
+            ),
+            patch(
+                "forge.workflow.nodes.implement_review._post_review_addressing_comment",
+                new=AsyncMock(),
+            ),
+            patch(
+                "forge.workflow.nodes.implement_review._reply_to_review_threads",
+                new=AsyncMock(),
+            ) as reply_threads,
+            patch(
+                "forge.workflow.nodes.implement_review.ContainerRunner",
+                return_value=mock_runner,
+            ),
+        ):
+            result = await implement_review(state)
+
+        assert mock_runner.run.await_count == 2
+        assert result["current_node"] == "review_response_gate"
+        assert result["contested_comments"] == [decisions[1]]
+        assert result["review_comments"] == decisions
+        assert reply_threads.await_count == 2
+
+    def test_confirming_one_thread_routes_to_implementation_with_others_pending(self):
+        from forge.workflow.nodes.implement_review import route_review_response
+
+        state = make_workflow_state(
+            current_node="review_response_gate",
+            is_paused=False,
+            revision_requested=True,
+            contested_comments=[{"thread_id": "still-pending", "comment_id": 20}],
+        )
+
+        assert route_review_response(state) == "implement_review"
 
 
 # ── resume path from review_response_gate after forge:retry ────────────────────

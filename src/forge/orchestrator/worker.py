@@ -37,6 +37,10 @@ from forge.workflow.utils.automated_review_triage import (
 )
 from forge.workflow.utils.comment_classifier import CommentType, classify_comment
 from forge.workflow.utils.jira_status import post_status_comment
+from forge.workflow.utils.proposal_review_threads import (
+    reply_to_proposal_decisions,
+    triage_proposal_review_threads,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -471,8 +475,49 @@ class OrchestratorWorker:
         pr_merged = False
         feedback = None
         automated_review_revision_pending = None
+        proposal_review_threads: list[dict[str, Any]] = []
+        proposal_review_decisions: list[dict[str, Any]] = []
 
         current_node = current_state.get("current_node", "")
+
+        # An inline reply at the review-response gate applies only to its thread.
+        # Preserve unrelated contested threads and re-run review analysis so any
+        # newly accepted item can proceed without globally clearing objections.
+        if (
+            message.source == EventSource.GITHUB
+            and "pull_request_review_comment" in message.event_type
+            and current_node == "review_response_gate"
+            and current_state.get("is_paused", True)
+        ):
+            reply = payload.get("comment", {})
+            replied_to = reply.get("in_reply_to_id")
+            if replied_to:
+                sender_login = payload.get("sender", {}).get("login", "")
+                github = GitHubClient()
+                try:
+                    forge_login = (await github.get_authenticated_user()).get("login", "")
+                finally:
+                    await github.close()
+                if sender_login and sender_login == forge_login:
+                    logger.debug("Ignoring Forge's own inline review reply")
+                    return current_state
+                contested = current_state.get("contested_comments", [])
+                remaining = [
+                    item for item in contested if item.get("comment_id") != replied_to
+                ]
+                return {
+                    **current_state,
+                    "is_paused": False,
+                    "revision_requested": True,
+                    "feedback_comment": reply.get("body", ""),
+                    "contested_comments": remaining,
+                    "context": {
+                        **current_state.get("context", {}),
+                        "resume_event": message.event_type,
+                        "payload": payload,
+                        "review_thread_comment_id": replied_to,
+                    },
+                }
 
         # GitHub check_run/check_suite events are the explicit signal for wait_for_ci_gate.
         # They don't carry Jira labels or comments, so handle them before the label loop.
@@ -830,6 +875,56 @@ class OrchestratorWorker:
                     else:
                         logger.info(f"Detected Feature-level comment: {feedback[:100]}...")
 
+        # A human reply to a proposal review thread resumes only that thread's
+        # feedback. Forge-authored replies are informational and must not loop.
+        if message.source == EventSource.GITHUB and "pull_request_review_comment" in message.event_type:
+            is_proposal_reply = (
+                self._is_prd_pr_event(message, current_state)
+                and current_node in _PRD_GATE_NODES
+            ) or (
+                self._is_spec_pr_event(message, current_state)
+                and current_node in _SPEC_GATE_NODES
+            )
+            reply = payload.get("comment", {})
+            replied_to = reply.get("in_reply_to_id")
+            if is_proposal_reply and replied_to:
+                github = GitHubClient()
+                try:
+                    forge_login = (await github.get_authenticated_user()).get("login", "")
+                finally:
+                    await github.close()
+                sender_login = payload.get("sender", {}).get("login", "")
+                if sender_login and sender_login == forge_login:
+                    return current_state
+                previous = current_state.get("proposal_review_decisions", [])
+                matching = next(
+                    (item for item in previous if item.get("comment_id") == replied_to),
+                    None,
+                )
+                if matching:
+                    reply_body = reply.get("body", "").strip()
+                    decisions = [
+                        {
+                            **item,
+                            "comment_id": reply.get("id", item.get("comment_id")),
+                            "disposition": "accept",
+                            "feedback": reply_body,
+                            "status": "pending",
+                        }
+                        if item is matching
+                        else item
+                        for item in previous
+                    ]
+                    return {
+                        **current_state,
+                        "is_paused": False,
+                        "revision_requested": True,
+                        "feedback_comment": reply_body,
+                        "proposal_review_decisions": decisions,
+                        "automated_review_revision_count": 0,
+                        "automated_review_revision_pending": False,
+                    }
+
         # GitHub events targeting the PRD proposals PR — handled at prd_approval_gate.
         # Merge = approval. Review with feedback = revision. Comment = feedback/question.
         if self._is_prd_pr_event(message, current_state) and current_node in _PRD_GATE_NODES:
@@ -850,9 +945,19 @@ class OrchestratorWorker:
                         _owner, _repo = repo_full.split("/", 1)
                         gh = GitHubClient()
                         try:
-                            inline_comments = await gh.get_review_comments(
-                                _owner, _repo, pr_number, review_id
+                            proposal_review_threads = (
+                                await gh.get_pull_request_review_threads(
+                                    _owner, _repo, pr_number
+                                )
                             )
+                            inline_comments = [
+                                {
+                                    "path": thread["path"],
+                                    "line": thread["line"],
+                                    "body": thread["comments"][-1]["body"],
+                                }
+                                for thread in proposal_review_threads
+                            ]
                         finally:
                             await gh.close()
 
@@ -947,9 +1052,19 @@ class OrchestratorWorker:
                         _owner, _repo = repo_full.split("/", 1)
                         gh = GitHubClient()
                         try:
-                            inline_comments = await gh.get_review_comments(
-                                _owner, _repo, pr_number, review_id
+                            proposal_review_threads = (
+                                await gh.get_pull_request_review_threads(
+                                    _owner, _repo, pr_number
+                                )
                             )
+                            inline_comments = [
+                                {
+                                    "path": thread["path"],
+                                    "line": thread["line"],
+                                    "body": thread["comments"][-1]["body"],
+                                }
+                                for thread in proposal_review_threads
+                            ]
                         finally:
                             await gh.close()
 
@@ -1065,11 +1180,65 @@ class OrchestratorWorker:
         is_spec_review = self._is_spec_pr_event(message, current_state) and current_node in (
             _SPEC_GATE_NODES
         )
+        if is_rejected and proposal_review_threads and (is_prd_review or is_spec_review):
+            previous_decisions = {
+                item.get("thread_id"): item
+                for item in current_state.get("proposal_review_decisions", [])
+                if item.get("thread_id")
+            }
+            proposal_review_threads = [
+                thread
+                for thread in proposal_review_threads
+                if previous_decisions.get(thread["thread_id"], {}).get("comment_id")
+                != thread["comments"][-1].get("comment_id")
+            ]
+            if proposal_review_threads:
+                artifact_type = "PRD" if is_prd_review else "specification"
+                artifact_content = current_state.get(
+                    "prd_content" if is_prd_review else "spec_content", ""
+                )
+                proposal_review_decisions = await triage_proposal_review_threads(
+                    artifact_type=artifact_type,
+                    artifact_content=artifact_content,
+                    threads=proposal_review_threads,
+                    ticket_key=message.ticket_key,
+                )
+                repo_full = payload.get("repository", {}).get("full_name", "")
+                pr_number = payload.get("pull_request", {}).get("number")
+                if repo_full and pr_number:
+                    await reply_to_proposal_decisions(
+                        repo_full_name=repo_full,
+                        pr_number=pr_number,
+                        decisions=proposal_review_decisions,
+                        dispositions={"reply", "ignore"},
+                    )
+                actionable_feedback = [
+                    decision.get("feedback")
+                    or next(
+                        thread["comments"][-1].get("body", "")
+                        for thread in proposal_review_threads
+                        if thread["thread_id"] == decision["thread_id"]
+                    )
+                    for decision in proposal_review_decisions
+                    if decision["disposition"] in ("accept", "uncertain")
+                ]
+                feedback = "\n\n".join(item for item in actionable_feedback if item)
+                if not feedback:
+                    merged = {**previous_decisions}
+                    merged.update(
+                        {item["thread_id"]: item for item in proposal_review_decisions}
+                    )
+                    return {
+                        **current_state,
+                        "proposal_review_decisions": list(merged.values()),
+                    }
+
         if (
             is_rejected
             and feedback
             and (is_prd_review or is_spec_review)
             and is_bot_sender(payload)
+            and not proposal_review_decisions
         ):
             review = payload.get("review", {})
             review_state = review.get("state", "comment")
@@ -1312,6 +1481,7 @@ class OrchestratorWorker:
                     # receive its own automated revision budget.
                     updated_state["automated_review_revision_count"] = 0
                     updated_state["automated_review_revision_pending"] = False
+                    updated_state["proposal_review_decisions"] = []
         elif is_question:
             # Unpause so answer_question node runs, it will re-pause after answering
             updated_state["is_paused"] = False
@@ -1328,6 +1498,16 @@ class OrchestratorWorker:
             updated_state["is_paused"] = False
             updated_state["revision_requested"] = True
             updated_state["feedback_comment"] = feedback
+            if proposal_review_decisions:
+                previous = {
+                    item.get("thread_id"): item
+                    for item in current_state.get("proposal_review_decisions", [])
+                    if item.get("thread_id")
+                }
+                previous.update(
+                    {item["thread_id"]: item for item in proposal_review_decisions}
+                )
+                updated_state["proposal_review_decisions"] = list(previous.values())
             if automated_review_revision_pending is not None:
                 updated_state["automated_review_revision_pending"] = True
             elif is_prd_review or is_spec_review:

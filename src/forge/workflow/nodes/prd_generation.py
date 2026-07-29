@@ -20,6 +20,7 @@ from forge.workflow.nodes.proposal_pr import (
 )
 from forge.workflow.utils import update_state_timestamp
 from forge.workflow.utils.jira_status import post_status_comment
+from forge.workflow.utils.proposal_review_threads import reply_to_proposal_decisions
 
 logger = logging.getLogger(__name__)
 
@@ -277,6 +278,13 @@ async def regenerate_prd_with_feedback(state: WorkflowState) -> WorkflowState:
         # Publish revised PRD
         if state.get("prd_pr_number"):
             await _update_prd_proposal_pr(ticket_key, new_prd, state)
+            await reply_to_proposal_decisions(
+                repo_full_name=state.get("prd_pr_repo", ""),
+                pr_number=state["prd_pr_number"],
+                decisions=state.get("proposal_review_decisions", []),
+                dispositions={"accept", "uncertain"},
+                default_response="Forge addressed this feedback in the latest PRD revision.",
+            )
             pr_url = state.get("prd_pr_url", "")
             await post_status_comment(
                 jira,
@@ -307,6 +315,15 @@ async def regenerate_prd_with_feedback(state: WorkflowState) -> WorkflowState:
         automated_review_revision_count = state.get("automated_review_revision_count", 0)
         if state.get("automated_review_revision_pending"):
             automated_review_revision_count += 1
+        proposal_review_decisions = [
+            {
+                **decision,
+                "status": "addressed",
+            }
+            if decision.get("disposition") in ("accept", "uncertain")
+            else decision
+            for decision in state.get("proposal_review_decisions", [])
+        ]
 
         return update_state_timestamp(
             {
@@ -316,6 +333,7 @@ async def regenerate_prd_with_feedback(state: WorkflowState) -> WorkflowState:
                 "revision_requested": False,
                 "automated_review_revision_count": automated_review_revision_count,
                 "automated_review_revision_pending": False,
+                "proposal_review_decisions": proposal_review_decisions,
                 "current_node": "prd_approval_gate",
                 "last_error": None,
             }

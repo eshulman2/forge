@@ -184,7 +184,7 @@ class TestHandlePrdPrReview:
 
         with patch("forge.orchestrator.worker.GitHubClient") as MockGH:
             mock_gh = MagicMock()
-            mock_gh.get_review_comments = AsyncMock(return_value=[])
+            mock_gh.get_pull_request_review_threads = AsyncMock(return_value=[])
             mock_gh.close = AsyncMock()
             MockGH.return_value = mock_gh
 
@@ -193,7 +193,7 @@ class TestHandlePrdPrReview:
         assert result["is_paused"] is False
         assert result["revision_requested"] is True
         assert "more detail" in result["feedback_comment"]
-        mock_gh.get_review_comments.assert_called_once_with("org", "proposals", 7, 101)
+        mock_gh.get_pull_request_review_threads.assert_called_once_with("org", "proposals", 7)
 
     @pytest.mark.asyncio
     async def test_approved_review_is_ignored(self, worker):
@@ -211,6 +211,73 @@ class TestHandlePrdPrReview:
 
         # Should remain paused -- review approval is not an approval signal
         assert result.get("is_paused", True) is True
+
+    @pytest.mark.asyncio
+    async def test_mixed_threads_revise_accepts_and_reply_to_contested(self, worker):
+        msg = _make_message(
+            "pull_request_review:submitted",
+            {
+                "repository": {"full_name": "org/proposals"},
+                "pull_request": {"number": 7},
+                "review": {"id": 101, "state": "changes_requested", "body": "Mixed review"},
+                "sender": {"login": "reviewer", "type": "User"},
+            },
+        )
+        threads = [
+            {
+                "thread_id": "accept-thread",
+                "path": "prd.md",
+                "line": 10,
+                "comments": [{"comment_id": 10, "body": "Clarify authorization."}],
+            },
+            {
+                "thread_id": "reply-thread",
+                "path": "prd.md",
+                "line": 20,
+                "comments": [{"comment_id": 20, "body": "Rename the product."}],
+            },
+        ]
+        decisions = [
+            {
+                "thread_id": "accept-thread",
+                "comment_id": 10,
+                "disposition": "accept",
+                "feedback": "Clarify authorization.",
+                "response": "",
+                "reason": "Valid",
+            },
+            {
+                "thread_id": "reply-thread",
+                "comment_id": 20,
+                "disposition": "reply",
+                "feedback": "",
+                "response": "The product name is externally defined.",
+                "reason": "Invalid",
+            },
+        ]
+        state = _prd_gate_state(prd_content="# Current PRD")
+
+        with (
+            patch("forge.orchestrator.worker.GitHubClient") as MockGH,
+            patch(
+                "forge.orchestrator.worker.triage_proposal_review_threads",
+                new=AsyncMock(return_value=decisions),
+            ),
+            patch(
+                "forge.orchestrator.worker.reply_to_proposal_decisions",
+                new=AsyncMock(),
+            ) as reply_decisions,
+        ):
+            mock_gh = MagicMock()
+            mock_gh.get_pull_request_review_threads = AsyncMock(return_value=threads)
+            mock_gh.close = AsyncMock()
+            MockGH.return_value = mock_gh
+            result = await worker._handle_resume_event(msg, state)
+
+        assert result["revision_requested"] is True
+        assert result["feedback_comment"] == "Clarify authorization."
+        assert result["proposal_review_decisions"] == decisions
+        reply_decisions.assert_awaited_once()
 
 
 class TestHandlePrdPrComment:
@@ -301,6 +368,53 @@ class TestHandlePrdPrComment:
         assert result["is_paused"] is False
         assert result.get("is_question") is True
         assert "REST" in result["feedback_comment"]
+
+    @pytest.mark.asyncio
+    async def test_inline_reply_resumes_only_matching_proposal_thread(self, worker):
+        msg = _make_message(
+            "pull_request_review_comment:created",
+            {
+                "repository": {"full_name": "org/proposals"},
+                "pull_request": {"number": 7},
+                "comment": {
+                    "id": 11,
+                    "in_reply_to_id": 10,
+                    "body": "Please make this change after all.",
+                },
+                "sender": {"login": "reviewer"},
+            },
+        )
+        state = _prd_gate_state(
+            proposal_review_decisions=[
+                {
+                    "thread_id": "thread-a",
+                    "comment_id": 10,
+                    "disposition": "reply",
+                    "feedback": "",
+                    "response": "This conflicts with the API.",
+                },
+                {
+                    "thread_id": "thread-b",
+                    "comment_id": 20,
+                    "disposition": "reply",
+                    "feedback": "",
+                    "response": "This is out of scope.",
+                },
+            ]
+        )
+
+        with patch("forge.orchestrator.worker.GitHubClient") as MockGH:
+            mock_gh = MagicMock()
+            mock_gh.get_authenticated_user = AsyncMock(return_value={"login": "forge-bot"})
+            mock_gh.close = AsyncMock()
+            MockGH.return_value = mock_gh
+            result = await worker._handle_resume_event(msg, state)
+
+        assert result["revision_requested"] is True
+        assert result["feedback_comment"] == "Please make this change after all."
+        assert result["proposal_review_decisions"][0]["disposition"] == "accept"
+        assert result["proposal_review_decisions"][0]["comment_id"] == 11
+        assert result["proposal_review_decisions"][1] == state["proposal_review_decisions"][1]
 
     @pytest.mark.asyncio
     async def test_satisfied_bot_review_stays_paused(self, worker):
