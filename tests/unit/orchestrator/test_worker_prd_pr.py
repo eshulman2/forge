@@ -417,6 +417,44 @@ class TestHandlePrdPrComment:
         assert result["proposal_review_decisions"][1] == state["proposal_review_decisions"][1]
 
     @pytest.mark.asyncio
+    async def test_unknown_proposal_reply_target_is_ignored(self, worker, caplog):
+        msg = _make_message(
+            "pull_request_review_comment:created",
+            {
+                "repository": {"full_name": "org/proposals"},
+                "pull_request": {"number": 7},
+                "comment": {
+                    "id": 31,
+                    "in_reply_to_id": 999,
+                    "body": "This target is not in workflow state.",
+                },
+                "sender": {"login": "reviewer"},
+            },
+        )
+        state = _prd_gate_state(
+            proposal_review_decisions=[
+                {
+                    "thread_id": "known-thread",
+                    "comment_id": 10,
+                    "disposition": "reply",
+                    "feedback": "",
+                    "response": "This conflicts with the API.",
+                }
+            ]
+        )
+
+        caplog.set_level("DEBUG", logger="forge.orchestrator.worker")
+        with patch.object(
+            worker,
+            "_get_forge_github_login",
+            new=AsyncMock(return_value="forge-bot"),
+        ):
+            result = await worker._handle_resume_event(msg, state)
+
+        assert result == state
+        assert "Proposal reply target 999 did not match" in caplog.text
+
+    @pytest.mark.asyncio
     async def test_standalone_inline_proposal_comment_is_triaged(self, worker):
         msg = _make_message(
             "pull_request_review_comment:created",
