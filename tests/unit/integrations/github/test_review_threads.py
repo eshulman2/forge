@@ -92,3 +92,31 @@ async def test_reply_to_review_comment_uses_thread_reply_endpoint() -> None:
         "/repos/org/repo/pulls/9/comments/77/replies",
         json={"body": "Addressed."},
     )
+
+
+@pytest.mark.asyncio
+async def test_review_threads_fall_back_to_rest() -> None:
+    response = AsyncMock()
+    response.raise_for_status = lambda: None
+    response.json = lambda: [
+        {
+            "id": 77,
+            "path": "src/app.py",
+            "line": 12,
+            "body": "Handle the empty case.",
+            "user": {"login": "reviewer"},
+            "created_at": "2026-07-29T00:00:00Z",
+            "commit_id": "abc123",
+        }
+    ]
+    http = AsyncMock()
+    http.post.side_effect = RuntimeError("GraphQL unavailable")
+    http.get.return_value = response
+    github = GitHubClient()
+    github._get_client = AsyncMock(return_value=http)
+
+    threads = await github.get_pull_request_review_threads("org", "repo", 9)
+
+    assert threads[0]["thread_id"] == "rest-77"
+    assert threads[0]["comments"][0]["comment_id"] == 77
+    http.get.assert_awaited_once_with("/repos/org/repo/pulls/9/comments", params={"per_page": 100})

@@ -1210,9 +1210,12 @@ class OrchestratorWorker:
                 actionable_feedback = [
                     decision.get("feedback")
                     or next(
-                        thread["comments"][-1].get("body", "")
-                        for thread in proposal_review_threads
-                        if thread["thread_id"] == decision["thread_id"]
+                        (
+                            thread["comments"][-1].get("body", "")
+                            for thread in proposal_review_threads
+                            if thread["thread_id"] == decision["thread_id"]
+                        ),
+                        "",
                     )
                     for decision in proposal_review_decisions
                     if decision["disposition"] in ("accept", "uncertain")

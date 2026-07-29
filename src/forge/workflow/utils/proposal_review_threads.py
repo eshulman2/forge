@@ -95,6 +95,10 @@ async def reply_to_proposal_decisions(
     default_response: str = "",
 ) -> None:
     """Reply to selected proposal decisions in their originating threads."""
+    if not repo_full_name or "/" not in repo_full_name or not pr_number:
+        logger.warning("Skipping proposal review replies: incomplete PR coordinates")
+        return
+
     from forge.integrations.github.client import GitHubClient
 
     owner, repo = repo_full_name.split("/", 1)

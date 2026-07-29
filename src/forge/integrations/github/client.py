@@ -252,25 +252,61 @@ class GitHubClient:
         }
         """
         client = await self._get_client()
-        response = await client.post(
-            "/graphql",
-            json={
-                "query": query,
-                "variables": {"owner": owner, "repo": repo, "prNumber": pr_number},
-            },
-        )
-        response.raise_for_status()
-        payload = response.json()
-        if payload.get("errors"):
-            raise RuntimeError(f"GitHub GraphQL errors: {payload['errors']}")
+        try:
+            response = await client.post(
+                "/graphql",
+                json={
+                    "query": query,
+                    "variables": {"owner": owner, "repo": repo, "prNumber": pr_number},
+                },
+            )
+            response.raise_for_status()
+            payload = response.json()
+            if payload.get("errors"):
+                raise RuntimeError(f"GitHub GraphQL errors: {payload['errors']}")
 
-        nodes = (
-            payload.get("data", {})
-            .get("repository", {})
-            .get("pullRequest", {})
-            .get("reviewThreads", {})
-            .get("nodes", [])
-        )
+            nodes = (
+                payload.get("data", {})
+                .get("repository", {})
+                .get("pullRequest", {})
+                .get("reviewThreads", {})
+                .get("nodes", [])
+            )
+        except Exception as exc:
+            logger.warning("GraphQL review thread fetch failed, falling back to REST: %s", exc)
+            response = await client.get(
+                f"/repos/{owner}/{repo}/pulls/{pr_number}/comments",
+                params={"per_page": 100},
+            )
+            response.raise_for_status()
+            grouped: dict[int, list[dict[str, Any]]] = {}
+            for comment in response.json():
+                root_id = comment.get("in_reply_to_id") or comment.get("id")
+                if isinstance(root_id, int):
+                    grouped.setdefault(root_id, []).append(comment)
+            return [
+                {
+                    "thread_id": f"rest-{root_id}",
+                    "path": comments[0].get("path", ""),
+                    "line": comments[0].get("line")
+                    or comments[0].get("original_line")
+                    or comments[0].get("position"),
+                    "is_resolved": False,
+                    "is_outdated": False,
+                    "comments": [
+                        {
+                            "node_id": comment.get("node_id", ""),
+                            "comment_id": comment.get("id"),
+                            "body": comment.get("body", ""),
+                            "author": (comment.get("user") or {}).get("login", ""),
+                            "created_at": comment.get("created_at", ""),
+                            "commit_sha": comment.get("commit_id", ""),
+                        }
+                        for comment in comments
+                    ],
+                }
+                for root_id, comments in grouped.items()
+            ]
         threads = []
         for thread in nodes:
             if thread.get("isResolved") or thread.get("isOutdated"):
@@ -282,6 +318,8 @@ class GitHubClient:
                 {
                     "thread_id": thread.get("id", ""),
                     "path": thread.get("path") or comments[0].get("path", ""),
+                    # Prefer the current thread line, then original locations retained
+                    # by GitHub when the diff has moved since the review was submitted.
                     "line": thread.get("line")
                     or thread.get("originalLine")
                     or comments[0].get("line")

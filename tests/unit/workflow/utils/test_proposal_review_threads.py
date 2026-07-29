@@ -1,4 +1,11 @@
-from forge.workflow.utils.proposal_review_threads import parse_proposal_thread_decisions
+from unittest.mock import patch
+
+import pytest
+
+from forge.workflow.utils.proposal_review_threads import (
+    parse_proposal_thread_decisions,
+    reply_to_proposal_decisions,
+)
 
 
 def _threads():
@@ -39,3 +46,16 @@ def test_missing_decision_conservatively_revises_original_feedback() -> None:
 
     assert [item["disposition"] for item in decisions] == ["uncertain", "uncertain"]
     assert decisions[0]["feedback"] == "Clarify authorization."
+
+
+@pytest.mark.asyncio
+async def test_reply_skips_missing_repo_coordinates() -> None:
+    with patch("forge.integrations.github.client.GitHubClient") as github:
+        await reply_to_proposal_decisions(
+            repo_full_name="",
+            pr_number=7,
+            decisions=[{"disposition": "reply", "comment_id": 10, "response": "No."}],
+            dispositions={"reply"},
+        )
+
+    github.assert_not_called()

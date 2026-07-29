@@ -370,38 +370,27 @@ async def implement_review(state: WorkflowState) -> WorkflowState:
                 pr_number=pr_number,
                 attempt=0,
             )
-            accepted_decisions = [
-                {
-                    **item,
-                    "response": item.get("response")
-                    or "Forge implemented this feedback in the latest pushed revision.",
-                }
-                for item in decisions
-                if item["disposition"] == "accept"
-            ]
-            await _reply_to_review_threads(
-                owner=_owner,
-                repo=_repo,
-                pr_number=pr_number,
-                decisions=accepted_decisions,
-            )
+            accepted_response = "Forge implemented this feedback in the latest pushed revision."
         else:
             logger.info(f"No new commits after review implementation for {ticket_key}")
-            accepted_decisions = [
-                {
-                    **item,
-                    "response": item.get("response")
-                    or "Forge verified this feedback; no additional code change was needed.",
-                }
-                for item in decisions
-                if item["disposition"] == "accept"
-            ]
-            await _reply_to_review_threads(
-                owner=_owner,
-                repo=_repo,
-                pr_number=pr_number,
-                decisions=accepted_decisions,
+            accepted_response = (
+                "Forge verified this feedback; no additional code change was needed."
             )
+
+        accepted_decisions = [
+            {
+                **item,
+                "response": item.get("response") or accepted_response,
+            }
+            for item in decisions
+            if item["disposition"] == "accept"
+        ]
+        await _reply_to_review_threads(
+            owner=_owner,
+            repo=_repo,
+            pr_number=pr_number,
+            decisions=accepted_decisions,
+        )
 
         # Only re-enter the CI gate if we actually pushed new commits; otherwise
         # CI won't re-trigger and wait_for_ci_gate would block forever.
