@@ -117,6 +117,21 @@ class OrchestratorWorker:
         self._shutdown_event = asyncio.Event()
         self._checkpointer = None
         self._compiled_workflows: dict[str, Any] = {}  # Cache compiled workflows by name
+        self._forge_github_login: str | None = None
+
+    async def _get_forge_github_login(self) -> str:
+        """Resolve and cache the authenticated Forge GitHub login."""
+        cached = getattr(self, "_forge_github_login", None)
+        if cached:
+            return cached
+        github = GitHubClient()
+        try:
+            login = (await github.get_authenticated_user()).get("login", "")
+        finally:
+            await github.close()
+        if login:
+            self._forge_github_login = login
+        return login
 
     async def _handle_jira_event(self, message: QueueMessage) -> None:
         """Handle a Jira webhook event.
@@ -491,16 +506,12 @@ class OrchestratorWorker:
         ):
             reply = payload.get("comment", {})
             replied_to = reply.get("in_reply_to_id")
+            sender_login = payload.get("sender", {}).get("login", "")
+            forge_login = await self._get_forge_github_login()
+            if sender_login and sender_login == forge_login:
+                logger.debug("Ignoring Forge's own inline review comment")
+                return current_state
             if replied_to:
-                sender_login = payload.get("sender", {}).get("login", "")
-                github = GitHubClient()
-                try:
-                    forge_login = (await github.get_authenticated_user()).get("login", "")
-                finally:
-                    await github.close()
-                if sender_login and sender_login == forge_login:
-                    logger.debug("Ignoring Forge's own inline review reply")
-                    return current_state
                 contested = current_state.get("contested_comments", [])
                 remaining = [item for item in contested if item.get("comment_id") != replied_to]
                 return {
@@ -516,6 +527,18 @@ class OrchestratorWorker:
                         "review_thread_comment_id": replied_to,
                     },
                 }
+            return {
+                **current_state,
+                "is_paused": False,
+                "revision_requested": True,
+                "feedback_comment": reply.get("body", ""),
+                "context": {
+                    **current_state.get("context", {}),
+                    "resume_event": message.event_type,
+                    "payload": payload,
+                    "review_thread_comment_id": reply.get("id"),
+                },
+            }
 
         # GitHub check_run/check_suite events are the explicit signal for wait_for_ci_gate.
         # They don't carry Jira labels or comments, so handle them before the label loop.
@@ -886,15 +909,12 @@ class OrchestratorWorker:
             )
             reply = payload.get("comment", {})
             replied_to = reply.get("in_reply_to_id")
-            if is_proposal_reply and replied_to:
-                github = GitHubClient()
-                try:
-                    forge_login = (await github.get_authenticated_user()).get("login", "")
-                finally:
-                    await github.close()
+            if is_proposal_reply:
+                forge_login = await self._get_forge_github_login()
                 sender_login = payload.get("sender", {}).get("login", "")
                 if sender_login and sender_login == forge_login:
                     return current_state
+            if is_proposal_reply and replied_to:
                 previous = current_state.get("proposal_review_decisions", [])
                 matching = next(
                     (item for item in previous if item.get("comment_id") == replied_to),
@@ -910,7 +930,7 @@ class OrchestratorWorker:
                             "feedback": reply_body,
                             "status": "pending",
                         }
-                        if item is matching
+                        if item.get("thread_id") == matching.get("thread_id")
                         else item
                         for item in previous
                     ]
@@ -923,6 +943,31 @@ class OrchestratorWorker:
                         "automated_review_revision_count": 0,
                         "automated_review_revision_pending": False,
                     }
+                logger.debug(
+                    "Proposal reply target %s did not match a stored review decision",
+                    replied_to,
+                )
+            elif is_proposal_reply:
+                body = reply.get("body", "").strip()
+                comment_id = reply.get("id")
+                if body and isinstance(comment_id, int):
+                    proposal_review_threads = [
+                        {
+                            "thread_id": f"comment-{comment_id}",
+                            "path": reply.get("path", ""),
+                            "line": reply.get("line") or reply.get("original_line"),
+                            "comments": [
+                                {
+                                    "comment_id": comment_id,
+                                    "body": body,
+                                    "author": sender_login,
+                                    "commit_sha": reply.get("commit_id", ""),
+                                }
+                            ],
+                        }
+                    ]
+                    is_rejected = True
+                    feedback = body
 
         # GitHub events targeting the PRD proposals PR — handled at prd_approval_gate.
         # Merge = approval. Review with feedback = revision. Comment = feedback/question.

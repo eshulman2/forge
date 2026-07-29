@@ -417,6 +417,49 @@ class TestHandlePrdPrComment:
         assert result["proposal_review_decisions"][1] == state["proposal_review_decisions"][1]
 
     @pytest.mark.asyncio
+    async def test_standalone_inline_proposal_comment_is_triaged(self, worker):
+        msg = _make_message(
+            "pull_request_review_comment:created",
+            {
+                "repository": {"full_name": "org/proposals"},
+                "pull_request": {"number": 7},
+                "comment": {
+                    "id": 30,
+                    "path": "prd.md",
+                    "line": 12,
+                    "body": "Clarify the authorization behavior.",
+                    "commit_id": "abc123",
+                },
+                "sender": {"login": "reviewer"},
+            },
+        )
+        decision = {
+            "thread_id": "comment-30",
+            "comment_id": 30,
+            "disposition": "accept",
+            "feedback": "Clarify the authorization behavior.",
+            "response": "",
+            "reason": "Valid",
+        }
+        state = _prd_gate_state(prd_content="# Current PRD")
+
+        with (
+            patch.object(
+                worker, "_get_forge_github_login", new=AsyncMock(return_value="forge-bot")
+            ),
+            patch(
+                "forge.orchestrator.worker.triage_proposal_review_threads",
+                new=AsyncMock(return_value=[decision]),
+            ) as triage,
+        ):
+            result = await worker._handle_resume_event(msg, state)
+
+        assert result["revision_requested"] is True
+        assert result["feedback_comment"] == "Clarify the authorization behavior."
+        assert result["proposal_review_decisions"] == [decision]
+        triage.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_satisfied_bot_review_stays_paused(self, worker):
         msg = _make_message(
             "issue_comment:created",

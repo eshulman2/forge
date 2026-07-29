@@ -1324,6 +1324,20 @@ class TestHandleResumeEventReviewGates:
     """Tests for resuming workflows from human_review_gate and review_response_gate."""
 
     @pytest.mark.asyncio
+    async def test_forge_github_login_is_cached_per_worker(self):
+        worker = OrchestratorWorker.__new__(OrchestratorWorker)
+        mock_github = AsyncMock()
+        mock_github.get_authenticated_user.return_value = {"login": "forge-bot"}
+
+        with patch("forge.orchestrator.worker.GitHubClient", return_value=mock_github):
+            first = await worker._get_forge_github_login()
+            second = await worker._get_forge_github_login()
+
+        assert first == second == "forge-bot"
+        mock_github.get_authenticated_user.assert_awaited_once()
+        mock_github.close.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_inline_reply_resumes_only_its_contested_thread(self):
         worker = OrchestratorWorker(consumer_name="test-worker")
         state = {
@@ -1362,9 +1376,40 @@ class TestHandleResumeEventReviewGates:
         assert result["is_paused"] is False
         assert result["revision_requested"] is True
         assert result["feedback_comment"] == "Please make this change after all."
-        assert result["contested_comments"] == [
-            {"thread_id": "thread-b", "comment_id": 20}
-        ]
+        assert result["contested_comments"] == [{"thread_id": "thread-b", "comment_id": 20}]
+
+    @pytest.mark.asyncio
+    async def test_standalone_inline_comment_is_actionable_at_response_gate(self):
+        worker = OrchestratorWorker(consumer_name="test-worker")
+        state = {
+            "ticket_key": "TEST-233",
+            "current_node": "review_response_gate",
+            "is_paused": True,
+            "contested_comments": [{"thread_id": "thread-a", "comment_id": 10}],
+            "context": {},
+        }
+        message = QueueMessage(
+            message_id="msg-new-thread",
+            event_id="evt-new-thread",
+            source=EventSource.GITHUB,
+            event_type="pull_request_review_comment:created",
+            ticket_key="TEST-233",
+            payload={
+                "comment": {"id": 30, "body": "Please cover this edge case."},
+                "pull_request": {"number": 42},
+                "repository": {"full_name": "owner/repo"},
+                "sender": {"login": "reviewer"},
+            },
+        )
+        mock_github = AsyncMock()
+        mock_github.get_authenticated_user.return_value = {"login": "forge-bot"}
+
+        with patch("forge.orchestrator.worker.GitHubClient", return_value=mock_github):
+            result = await worker._handle_resume_event(message, state)
+
+        assert result["revision_requested"] is True
+        assert result["feedback_comment"] == "Please cover this edge case."
+        assert result["contested_comments"] == state["contested_comments"]
 
     @pytest.mark.asyncio
     @patch("forge.orchestrator.worker.post_status_comment", new_callable=AsyncMock)
