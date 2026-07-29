@@ -7,6 +7,7 @@ from typing import Any
 
 from forge.api.routes.metrics import record_proposal_review_decision
 from forge.prompts import load_prompt
+from forge.workflow.utils.review_decisions import reply_to_review_decisions
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +18,11 @@ def parse_proposal_thread_decisions(
     output: str, threads: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
     """Parse decisions and conservatively accept missing or malformed items."""
-    expected = {thread["thread_id"]: thread for thread in threads}
+    expected = {
+        thread["thread_id"]: thread
+        for thread in threads
+        if thread.get("thread_id") and thread.get("comments")
+    }
     match = re.search(r"\[.*\]", output, re.DOTALL)
     parsed: list[Any] = []
     if match:
@@ -106,27 +111,13 @@ async def reply_to_proposal_decisions(
     default_response: str = "",
 ) -> None:
     """Reply to selected proposal decisions in their originating threads."""
-    if not repo_full_name or "/" not in repo_full_name or not pr_number:
-        logger.warning("Skipping proposal review replies: incomplete PR coordinates")
-        return
-
-    from forge.integrations.github.client import GitHubClient
-
-    owner, repo = repo_full_name.split("/", 1)
-    github = GitHubClient()
-    try:
-        for decision in decisions:
-            if decision.get("disposition") not in dispositions:
-                continue
-            if decision.get("status") == "addressed":
-                continue
-            comment_id = decision.get("comment_id")
-            response = decision.get("response") or default_response
-            if not isinstance(comment_id, int) or not response:
-                continue
-            try:
-                await github.reply_to_review_comment(owner, repo, pr_number, comment_id, response)
-            except Exception as exc:
-                logger.warning("Failed replying to proposal comment %s: %s", comment_id, exc)
-    finally:
-        await github.close()
+    for decision in decisions:
+        if not str(decision.get("response", "")).strip():
+            decision["response"] = default_response
+    await reply_to_review_decisions(
+        repo_full_name=repo_full_name,
+        pr_number=pr_number,
+        decisions=decisions,
+        dispositions=dispositions,
+        skip_addressed=True,
+    )

@@ -49,6 +49,14 @@ def test_missing_decision_conservatively_revises_original_feedback() -> None:
     assert decisions[0]["feedback"] == "Clarify authorization."
 
 
+def test_empty_comment_threads_are_ignored() -> None:
+    decisions = parse_proposal_thread_decisions(
+        "not json", [{"thread_id": "empty", "comments": []}, *_threads()]
+    )
+
+    assert [item["thread_id"] for item in decisions] == ["thread-1", "thread-2"]
+
+
 @pytest.mark.asyncio
 async def test_reply_skips_missing_repo_coordinates() -> None:
     with patch("forge.integrations.github.client.GitHubClient") as github:

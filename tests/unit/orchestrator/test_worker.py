@@ -1345,7 +1345,7 @@ class TestHandleResumeEventReviewGates:
             "current_node": "review_response_gate",
             "is_paused": True,
             "contested_comments": [
-                {"thread_id": "thread-a", "comment_id": 10},
+                {"thread_id": "thread-a", "comment_id": 10, "forge_reply_id": 11},
                 {"thread_id": "thread-b", "comment_id": 20},
             ],
             "context": {},
@@ -1358,8 +1358,8 @@ class TestHandleResumeEventReviewGates:
             ticket_key="TEST-233",
             payload={
                 "comment": {
-                    "id": 11,
-                    "in_reply_to_id": 10,
+                    "id": 12,
+                    "in_reply_to_id": 11,
                     "body": "Please make this change after all.",
                 },
                 "pull_request": {"number": 42},

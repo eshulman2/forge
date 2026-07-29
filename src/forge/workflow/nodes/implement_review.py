@@ -17,7 +17,10 @@ from forge.workflow.nodes.code_review import run_post_change_review, sync_pr_des
 from forge.workflow.nodes.workspace_setup import prepare_workspace
 from forge.workflow.utils import set_paused, update_state_timestamp
 from forge.workflow.utils.jira_status import post_status_comment
-from forge.workflow.utils.review_decisions import merge_review_decisions
+from forge.workflow.utils.review_decisions import (
+    merge_review_decisions,
+    reply_to_review_decisions,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -155,21 +158,11 @@ async def _reply_to_review_threads(
     *, owner: str, repo: str, pr_number: int | None, decisions: list[dict[str, Any]]
 ) -> None:
     """Post decision responses in their originating GitHub review threads."""
-    if not pr_number or not decisions:
-        return
-    github = GitHubClient()
-    try:
-        for decision in decisions:
-            comment_id = decision.get("comment_id")
-            response = str(decision.get("response", "")).strip()
-            if not isinstance(comment_id, int) or not response:
-                continue
-            try:
-                await github.reply_to_review_comment(owner, repo, pr_number, comment_id, response)
-            except Exception as exc:
-                logger.warning("Failed replying to review comment %s: %s", comment_id, exc)
-    finally:
-        await github.close()
+    await reply_to_review_decisions(
+        repo_full_name=f"{owner}/{repo}",
+        pr_number=pr_number,
+        decisions=decisions,
+    )
 
 
 async def implement_review(state: WorkflowState) -> WorkflowState:
@@ -365,14 +358,10 @@ async def implement_review(state: WorkflowState) -> WorkflowState:
                 "Forge verified this feedback; no additional code change was needed."
             )
 
-        accepted_decisions = [
-            {
-                **item,
-                "response": item.get("response") or accepted_response,
-            }
-            for item in decisions
-            if item["disposition"] == "accept"
-        ]
+        accepted_decisions = [item for item in decisions if item["disposition"] == "accept"]
+        for decision in accepted_decisions:
+            if not decision.get("response"):
+                decision["response"] = accepted_response
         await _reply_to_review_threads(
             owner=_owner,
             repo=_repo,

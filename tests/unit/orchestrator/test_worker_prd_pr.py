@@ -377,8 +377,8 @@ class TestHandlePrdPrComment:
                 "repository": {"full_name": "org/proposals"},
                 "pull_request": {"number": 7},
                 "comment": {
-                    "id": 11,
-                    "in_reply_to_id": 10,
+                    "id": 12,
+                    "in_reply_to_id": 11,
                     "body": "Please make this change after all.",
                 },
                 "sender": {"login": "reviewer"},
@@ -389,6 +389,7 @@ class TestHandlePrdPrComment:
                 {
                     "thread_id": "thread-a",
                     "comment_id": 10,
+                    "forge_reply_id": 11,
                     "disposition": "reply",
                     "feedback": "",
                     "response": "This conflicts with the API.",
@@ -413,7 +414,7 @@ class TestHandlePrdPrComment:
         assert result["revision_requested"] is True
         assert result["feedback_comment"] == "Please make this change after all."
         assert result["proposal_review_decisions"][0]["disposition"] == "accept"
-        assert result["proposal_review_decisions"][0]["comment_id"] == 11
+        assert result["proposal_review_decisions"][0]["comment_id"] == 12
         assert result["proposal_review_decisions"][1] == state["proposal_review_decisions"][1]
 
     @pytest.mark.asyncio

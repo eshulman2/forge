@@ -41,7 +41,11 @@ from forge.workflow.utils.proposal_review_threads import (
     reply_to_proposal_decisions,
     triage_proposal_review_threads,
 )
-from forge.workflow.utils.review_decisions import merge_review_decisions
+from forge.workflow.utils.review_decisions import (
+    decision_matches_comment,
+    flatten_review_threads,
+    merge_review_decisions,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -514,7 +518,9 @@ class OrchestratorWorker:
                 return current_state
             if replied_to:
                 contested = current_state.get("contested_comments", [])
-                remaining = [item for item in contested if item.get("comment_id") != replied_to]
+                remaining = [
+                    item for item in contested if not decision_matches_comment(item, replied_to)
+                ]
                 return {
                     **current_state,
                     "is_paused": False,
@@ -918,7 +924,7 @@ class OrchestratorWorker:
             if is_proposal_reply and replied_to:
                 previous = current_state.get("proposal_review_decisions", [])
                 matching = next(
-                    (item for item in previous if item.get("comment_id") == replied_to),
+                    (item for item in previous if decision_matches_comment(item, replied_to)),
                     None,
                 )
                 if matching:
@@ -993,14 +999,7 @@ class OrchestratorWorker:
                             proposal_review_threads = await gh.get_pull_request_review_threads(
                                 _owner, _repo, pr_number
                             )
-                            inline_comments = [
-                                {
-                                    "path": thread["path"],
-                                    "line": thread["line"],
-                                    "body": thread["comments"][-1]["body"],
-                                }
-                                for thread in proposal_review_threads
-                            ]
+                            inline_comments = flatten_review_threads(proposal_review_threads)
                         finally:
                             await gh.close()
 
@@ -1098,14 +1097,7 @@ class OrchestratorWorker:
                             proposal_review_threads = await gh.get_pull_request_review_threads(
                                 _owner, _repo, pr_number
                             )
-                            inline_comments = [
-                                {
-                                    "path": thread["path"],
-                                    "line": thread["line"],
-                                    "body": thread["comments"][-1]["body"],
-                                }
-                                for thread in proposal_review_threads
-                            ]
+                            inline_comments = flatten_review_threads(proposal_review_threads)
                         finally:
                             await gh.close()
 
