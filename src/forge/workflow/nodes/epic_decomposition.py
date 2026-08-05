@@ -11,6 +11,7 @@ from forge.workflow.feature.state import FeatureState as WorkflowState
 from forge.workflow.utils import update_state_timestamp
 from forge.workflow.utils.jira_status import post_status_comment
 from forge.workflow.utils.qa_summary import post_qa_summary_if_needed
+from forge.workflow.utils.repo_resolution import get_effective_repos
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +96,7 @@ async def decompose_epics(state: WorkflowState) -> WorkflowState:
         # Add repos from Jira project property (required in strict mode)
         settings = get_settings()
         try:
-            for repo in await jira.get_project_repos(project_key):
+            for repo in await get_effective_repos(jira, project_key):
                 available_repos.add(repo)
         except MissingProjectConfig as e:
             if settings.forge_require_project_config:
@@ -107,9 +108,8 @@ async def decompose_epics(state: WorkflowState) -> WorkflowState:
                 )
                 await jira.set_workflow_label(ticket_key, ForgeLabel.BLOCKED)
                 return {**state, "last_error": str(e), "current_node": "decompose_epics"}
-            logger.warning(f"Project {project_key}: {e} — falling back to GITHUB_KNOWN_REPOS")
-            for repo in settings.known_repos:
-                available_repos.add(repo)
+            logger.error(f"Project {project_key}: {e}")
+            return {**state, "last_error": str(e), "current_node": "decompose_epics"}
 
         available_repos = list(available_repos)
 

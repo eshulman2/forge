@@ -5,7 +5,6 @@ import logging
 import re
 from typing import Any
 
-from forge.config import get_settings
 from forge.integrations.agents import ForgeAgent
 from forge.integrations.jira.client import JiraClient, MissingProjectConfig
 from forge.models.workflow import ForgeLabel
@@ -13,6 +12,7 @@ from forge.prompts import load_prompt
 from forge.workflow.feature.state import FeatureState as WorkflowState
 from forge.workflow.utils import update_state_timestamp
 from forge.workflow.utils.jira_status import post_status_comment
+from forge.workflow.utils.repo_resolution import get_effective_default_repo
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +45,6 @@ async def generate_tasks(state: WorkflowState) -> WorkflowState:
 
     logger.info(f"Generating Tasks for {len(epic_keys)} Epics on {ticket_key}")
 
-    settings = get_settings()
     jira = JiraClient()
     agent = ForgeAgent()
 
@@ -147,13 +146,9 @@ async def generate_tasks(state: WorkflowState) -> WorkflowState:
 
                 if not repo or repo == "unknown" or "/" not in repo:
                     try:
-                        repo = await jira.get_project_default_repo(project_key)
+                        repo = await get_effective_default_repo(jira, project_key)
                     except MissingProjectConfig:
-                        repo = (
-                            settings.github_default_repo
-                            if not settings.forge_require_project_config
-                            else ""
-                        )
+                        repo = ""
 
                 if not repo or "/" not in repo:
                     logger.warning(
@@ -537,7 +532,6 @@ async def regenerate_epic_tasks(state: WorkflowState) -> WorkflowState:
 
     logger.info(f"Regenerating tasks for Epic {epic_key} on {ticket_key} with feedback")
 
-    settings = get_settings()
     jira = JiraClient()
     agent = ForgeAgent()
 
@@ -665,13 +659,9 @@ async def regenerate_epic_tasks(state: WorkflowState) -> WorkflowState:
                 repo = epic_repo
             if not repo or repo == "unknown" or "/" not in repo:
                 try:
-                    repo = await jira.get_project_default_repo(project_key)
+                    repo = await get_effective_default_repo(jira, project_key)
                 except MissingProjectConfig:
-                    repo = (
-                        settings.github_default_repo
-                        if not settings.forge_require_project_config
-                        else ""
-                    )
+                    repo = ""
             if not repo or "/" not in repo:
                 repo = "unknown"
 

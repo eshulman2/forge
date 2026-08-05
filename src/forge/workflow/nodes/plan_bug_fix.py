@@ -17,6 +17,7 @@ from forge.sandbox import ContainerRunner
 from forge.workflow.bug.state import BugState
 from forge.workflow.utils import merge_review_exhaustion, set_paused, update_state_timestamp
 from forge.workflow.utils.jira_status import post_status_comment
+from forge.workflow.utils.repo_resolution import get_effective_repos
 
 logger = logging.getLogger(__name__)
 
@@ -117,7 +118,7 @@ async def _run_plan_container(
         # Fetch the project's known repos so the agent uses real names in repo: tags
         known_repos: list[str] = []
         with contextlib.suppress(Exception):
-            known_repos = await jira.get_project_repos(issue.project_key)
+            known_repos = await get_effective_repos(jira, issue.project_key)
 
         task_description = load_prompt(
             prompt_name,
@@ -287,7 +288,7 @@ async def decompose_plan(state: BugState) -> BugState:
             # Fall back to the project's configured repos from Jira.
             # This handles plans that don't include explicit repo: tags.
             with contextlib.suppress(Exception):
-                project_repos = await jira.get_project_repos(issue.project_key)
+                project_repos = await get_effective_repos(jira, issue.project_key)
                 repos = project_repos[:1]  # one task for the primary repo
             if not repos:
                 logger.warning(

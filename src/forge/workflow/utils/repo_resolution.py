@@ -4,7 +4,36 @@ import contextlib
 import re
 from typing import Any
 
+from forge.config import get_settings
+from forge.integrations.jira.client import MissingProjectConfig
+
 _REPO_LABEL_PREFIX = "repo:"
+
+
+async def get_effective_repos(jira: Any, project_key: str) -> list[str]:
+    """Return repos from the configured authority for the current mode."""
+    settings = get_settings()
+    if not settings.forge_require_project_config:
+        repos = settings.known_repos
+        if not repos:
+            raise MissingProjectConfig(
+                "GITHUB_KNOWN_REPOS is not set while FORGE_REQUIRE_PROJECT_CONFIG=false"
+            )
+        return repos
+    return await jira.get_project_repos(project_key)
+
+
+async def get_effective_default_repo(jira: Any, project_key: str) -> str:
+    """Return the default repo from the configured authority for the current mode."""
+    settings = get_settings()
+    if not settings.forge_require_project_config:
+        repo = settings.github_default_repo.strip()
+        if not repo or "/" not in repo:
+            raise MissingProjectConfig(
+                "GITHUB_DEFAULT_REPO is not set while FORGE_REQUIRE_PROJECT_CONFIG=false"
+            )
+        return repo
+    return await jira.get_project_default_repo(project_key)
 
 
 def repo_from_labels(labels: list[str]) -> str | None:
@@ -51,7 +80,7 @@ async def resolve_current_repo(
     """Resolve target repo from state, labels, ticket text, or project defaults."""
     known_repos: list[str] = []
     with contextlib.suppress(Exception):
-        known_repos = await jira.get_project_repos(issue.project_key)
+        known_repos = await get_effective_repos(jira, issue.project_key)
 
     if current_repo and current_repo != "unknown" and "/" in current_repo:
         return current_repo, known_repos or [current_repo]
@@ -74,7 +103,7 @@ async def resolve_current_repo(
         return mentioned_repo, known_repos
 
     with contextlib.suppress(Exception):
-        default_repo = await jira.get_project_default_repo(issue.project_key)
+        default_repo = await get_effective_default_repo(jira, issue.project_key)
         if default_repo:
             return default_repo, known_repos or [default_repo]
 

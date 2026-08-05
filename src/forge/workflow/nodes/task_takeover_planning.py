@@ -13,6 +13,7 @@ from forge.prompts import load_prompt
 from forge.workflow.task_takeover.state import TaskTakeoverState
 from forge.workflow.utils import set_paused, update_state_timestamp
 from forge.workflow.utils.jira_status import post_status_comment
+from forge.workflow.utils.repo_resolution import get_effective_repos
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +100,7 @@ async def generate_plan(state: TaskTakeoverState) -> TaskTakeoverState:
         # generated plan, otherwise multi-repo Jira projects attach unrelated repos.
         known_repos: list[str] = []
         with contextlib.suppress(Exception):
-            known_repos = await jira.get_project_repos(issue.project_key)
+            known_repos = await get_effective_repos(jira, issue.project_key)
 
         if not known_repos:
             raise ValueError(f"No repositories configured for project {issue.project_key}")
