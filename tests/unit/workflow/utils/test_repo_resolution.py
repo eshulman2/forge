@@ -63,3 +63,21 @@ async def test_local_mode_does_not_fall_back_to_jira_when_env_is_missing() -> No
         await get_effective_repos(jira, "PROJ")
 
     jira.get_project_repos.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_local_mode_missing_default_repo_does_not_fall_back_to_jira() -> None:
+    jira = AsyncMock()
+    settings = MagicMock(
+        forge_require_project_config=False,
+        known_repos=["local/repo"],
+        github_default_repo="",
+    )
+
+    with (
+        patch("forge.workflow.utils.repo_resolution.get_settings", return_value=settings),
+        pytest.raises(MissingProjectConfig, match="GITHUB_DEFAULT_REPO"),
+    ):
+        await get_effective_default_repo(jira, "PROJ")
+
+    jira.get_project_default_repo.assert_not_awaited()

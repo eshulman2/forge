@@ -153,7 +153,9 @@ async def generate_tasks(state: WorkflowState) -> WorkflowState:
                 if not repo or "/" not in repo:
                     logger.warning(
                         f"Task '{summary}' has no valid repo. "
-                        "Set repo labels on Feature/Epic or GITHUB_DEFAULT_REPO."
+                        "Set repo labels on Feature/Epic or configure the default repository "
+                        "for the active mode (`forge.default_repo` in Jira or "
+                        "`GITHUB_DEFAULT_REPO` for local development)."
                     )
                     repo = "unknown"
 

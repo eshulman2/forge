@@ -108,7 +108,16 @@ async def decompose_epics(state: WorkflowState) -> WorkflowState:
                 )
                 await jira.set_workflow_label(ticket_key, ForgeLabel.BLOCKED)
                 return {**state, "last_error": str(e), "current_node": "decompose_epics"}
-            logger.error(f"Project {project_key}: {e}")
+            logger.error(f"Project {project_key}: {e} — posting config instructions and blocking")
+            await post_status_comment(
+                jira,
+                ticket_key,
+                "⚠️ Forge local repository configuration is missing.\n\n"
+                "Set `GITHUB_KNOWN_REPOS` to a comma-separated list of `owner/repo` values, "
+                "then add `forge:retry` to resume.\n\n"
+                f"Details: {e}",
+            )
+            await jira.set_workflow_label(ticket_key, ForgeLabel.BLOCKED)
             return {**state, "last_error": str(e), "current_node": "decompose_epics"}
 
         available_repos = list(available_repos)
