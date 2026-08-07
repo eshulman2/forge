@@ -43,6 +43,25 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def command_timeout(default: int) -> int:
+    """Return the configured per-command timeout, or the caller's default."""
+    raw_value = os.environ.get("CONTAINER_COMMAND_TIMEOUT")
+    if raw_value is None:
+        return default
+    try:
+        value = int(raw_value)
+        if value <= 0:
+            raise ValueError
+        return value
+    except ValueError:
+        logger.warning(
+            "Invalid CONTAINER_COMMAND_TIMEOUT=%r; using %d seconds",
+            raw_value,
+            default,
+        )
+        return default
+
+
 def resolve_llm_backend() -> str:
     """Read the required model backend."""
     backend = os.environ.get("LLM_BACKEND")
@@ -184,7 +203,7 @@ def run_tests(workspace: Path, test_command: str) -> bool:
             cwd=workspace,
             capture_output=True,
             text=True,
-            timeout=600,  # 10 minute timeout
+            timeout=command_timeout(600),
         )
 
         if result.returncode == 0:
@@ -197,7 +216,7 @@ def run_tests(workspace: Path, test_command: str) -> bool:
             return False
 
     except subprocess.TimeoutExpired:
-        logger.error("Tests timed out after 10 minutes")
+        logger.error("Tests timed out after %d seconds", command_timeout(600))
         return False
     except Exception as e:
         logger.error(f"Error running tests: {e}")
@@ -348,6 +367,7 @@ def build_system_prompt(
         task_description=task_description,
         guardrails=guardrails if guardrails else "No specific guidelines provided.",
         previous_task_keys=prev_keys_str,
+        command_timeout_seconds=command_timeout(600),
     )
 
 
@@ -614,7 +634,7 @@ async def run_agent_task(
             root_dir=str(workspace),
             inherit_env=True,
             virtual_mode=False,
-            timeout=600,
+            timeout=command_timeout(600),
         )
 
         # Build system prompt from template
@@ -717,7 +737,7 @@ async def run_reviewer_agent(
         root_dir=str(workspace),
         inherit_env=True,
         virtual_mode=False,
-        timeout=300,
+        timeout=command_timeout(300),
     )
 
     system_prompt = f"""You are a code reviewer agent. Your job is to review the implementation and provide a verdict.

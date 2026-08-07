@@ -15,6 +15,7 @@ def _settings(backend: str) -> MagicMock:
         llm_max_tokens=16384,
         git_user_name="Forge",
         git_user_email="forge@example.com",
+        container_command_timeout=1200,
         langfuse_enabled=False,
         container_langchain_verbose=False,
         log_level="INFO",
@@ -50,3 +51,4 @@ def test_build_env_vars_passes_only_selected_backend_credentials(
     assert env["LLM_BACKEND"] == backend
     assert env.items() >= expected.items()
     assert absent not in env
+    assert env["CONTAINER_COMMAND_TIMEOUT"] == "1200"

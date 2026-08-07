@@ -210,6 +210,7 @@ class ContainerRunner:
         # Pass git configuration for commits
         env["GIT_USER_NAME"] = self.settings.git_user_name
         env["GIT_USER_EMAIL"] = self.settings.git_user_email
+        env["CONTAINER_COMMAND_TIMEOUT"] = str(self.settings.container_command_timeout)
 
         # Pass Langfuse tracing credentials if enabled
         if self.settings.langfuse_enabled:

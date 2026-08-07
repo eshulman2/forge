@@ -453,6 +453,11 @@ class Settings(BaseSettings):
         default=1800,
         description="Container execution timeout in seconds (default: 30 minutes)",
     )
+    container_command_timeout: int = Field(
+        default=600,
+        gt=0,
+        description="Maximum execution time for individual commands inside containers",
+    )
     container_memory: str = Field(
         default="4g",
         description="Container memory limit",

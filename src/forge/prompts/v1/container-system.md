@@ -176,7 +176,7 @@ Always lint and auto-format changed files before committing.
 - Full project builds: `make`, `hack/build.sh`, `npm run build`
 - These will likely timeout even with extended limits
 
-**Command timeout is 600 seconds (10 minutes).** If a command times out:
+**Command timeout is {command_timeout_seconds} seconds.** If a command times out:
 1. Do NOT retry with the same command
 2. Use a more targeted validation (specific package, not `./...`)
 3. For simple changes (adding fields, imports), syntax validation is sufficient

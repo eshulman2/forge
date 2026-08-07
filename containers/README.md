@@ -111,6 +111,7 @@ Passed automatically by the orchestrator:
 | `ANTHROPIC_API_KEY` | API key for `anthropic` |
 | `LLM_MODEL` | Required model name (for example, `gemini-3.5-flash`) |
 | `CONTAINER_LLM_MODEL` | Optional container model override; it must be compatible with `LLM_BACKEND` because containers do not support a separate backend |
+| `CONTAINER_COMMAND_TIMEOUT` | Maximum execution time in seconds for individual shell commands and fallback tests (default: `600`) |
 | `FORGE_SYSTEM_PROMPT_TEMPLATE` | System prompt template (interpolated by entrypoint) |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Path to mounted gcloud credentials |
 | `GIT_USER_NAME` | Git author name for commits (default: `Forge`) |

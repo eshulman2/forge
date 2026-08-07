@@ -12,6 +12,28 @@ sys.path.insert(0, str(Path(__file__).parents[3] / "containers"))
 
 
 # ---------------------------------------------------------------------------
+# Test command timeout configuration
+# ---------------------------------------------------------------------------
+
+
+class TestCommandTimeout:
+    def test_uses_configured_timeout(self, monkeypatch):
+        from entrypoint import command_timeout
+
+        monkeypatch.setenv("CONTAINER_COMMAND_TIMEOUT", "1800")
+
+        assert command_timeout(600) == 1800
+
+    @pytest.mark.parametrize("value", ["invalid", "0", "-1"])
+    def test_invalid_timeout_uses_default(self, monkeypatch, value):
+        from entrypoint import command_timeout
+
+        monkeypatch.setenv("CONTAINER_COMMAND_TIMEOUT", value)
+
+        assert command_timeout(600) == 600
+
+
+# ---------------------------------------------------------------------------
 # Test _create_llm_model
 # ---------------------------------------------------------------------------
 
