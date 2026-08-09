@@ -1914,8 +1914,8 @@ class OrchestratorWorker:
             safe_error = redact_secrets(error) if error else "Unknown error"
             error_preview = safe_error[:200]
             comment = (
-                f"*Forge workflow stopped with error:*\n\n"
-                f"{{code}}{error_preview}{{code}}\n\n"
+                f"**Forge workflow stopped with error:**\n\n"
+                f"```\n{error_preview}\n```\n\n"
                 f"To retry the workflow, add the label `forge:retry` to this ticket."
             )
             await post_status_comment(jira, ticket_key, comment)

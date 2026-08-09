@@ -74,6 +74,33 @@ async def test_report_new_workflow_error_skips_non_reportable_errors(
     notify.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+async def test_terminal_error_comment_uses_markdown_code_block():
+    """Terminal errors use markup supported by the Markdown-to-ADF converter."""
+    worker = OrchestratorWorker.__new__(OrchestratorWorker)
+    jira = MagicMock()
+    jira.close = AsyncMock()
+
+    with (
+        patch("forge.integrations.jira.client.JiraClient", return_value=jira),
+        patch(
+            "forge.orchestrator.worker.post_status_comment", new_callable=AsyncMock
+        ) as post_comment,
+    ):
+        await worker._post_terminal_error_comment(
+            "TEST-123", "Object of type set is not JSON serializable"
+        )
+
+    post_comment.assert_awaited_once_with(
+        jira,
+        "TEST-123",
+        "**Forge workflow stopped with error:**\n\n"
+        "```\nObject of type set is not JSON serializable\n```\n\n"
+        "To retry the workflow, add the label `forge:retry` to this ticket.",
+    )
+    jira.close.assert_awaited_once()
+
+
 def _multi_repo_pr_state() -> dict:
     return {
         "ticket_key": "TEST-123",
