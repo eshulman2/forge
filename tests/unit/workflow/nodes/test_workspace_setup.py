@@ -12,6 +12,7 @@ import pytest
 from forge.models.workflow import ForgeLabel
 from forge.workflow.feature.state import create_initial_feature_state
 from forge.workflow.nodes.workspace_setup import prepare_workspace, setup_workspace
+from forge.workspace.manager import WorkspaceManager
 
 
 def create_mock_jira_client():
@@ -507,6 +508,38 @@ class TestPrepareWorkspaceRecovery:
         new_git.checkout_branch.assert_called_once_with("forge/test-123", remote="fork")
         assert new_git.workspace_recreated is True
 
+    def test_recovery_uses_container_aware_cleanup_for_old_workspace(self, tmp_path):
+        workspace_path = tmp_path / "forge-TEST-125-org-repo"
+        workspace_path.mkdir()
+
+        state = create_initial_feature_state(
+            ticket_key="TEST-125",
+            current_repo="org/repo",
+            workspace_path=str(workspace_path),
+            fork_owner="forge-bot",
+            fork_repo="repo",
+            context={"branch_name": "forge/test-125"},
+        )
+
+        old_git = MagicMock()
+        old_git.pull_rebase.side_effect = RuntimeError("sync failed")
+        new_git = MagicMock()
+        settings = MagicMock(workspace_base_dir=str(tmp_path))
+
+        with (
+            patch("forge.workflow.nodes.workspace_setup.get_settings", return_value=settings),
+            patch(
+                "forge.workflow.nodes.workspace_setup.GitOperations",
+                side_effect=[old_git, new_git],
+            ),
+            patch.object(WorkspaceManager, "remove_path") as remove_path,
+        ):
+            result_path, _ = prepare_workspace(state)
+
+        assert result_path == str(workspace_path)
+        remove_path.assert_called_once()
+        assert "-old-" in remove_path.call_args.args[0].name
+
     def test_failed_replacement_preserves_existing_workspace(self, tmp_path):
         """A failed recovery clone must not delete the only local commit."""
         workspace_path = tmp_path / "forge-TEST-124-org-repo"
@@ -561,13 +594,13 @@ class TestPrepareWorkspaceRecovery:
         real_rmtree = shutil.rmtree
         cleanup_calls = 0
 
-        def transient_rmtree(path, *args, **kwargs):
+        def transient_remove(path):
             nonlocal cleanup_calls
             if Path(path).name.startswith(f".{workspace_path.name}-old-"):
                 cleanup_calls += 1
                 if cleanup_calls == 1:
                     raise OSError(errno.ENOTEMPTY, "Directory not empty", path)
-            return real_rmtree(path, *args, **kwargs)
+            return real_rmtree(path)
 
         with (
             patch("forge.workflow.nodes.workspace_setup.get_settings", return_value=settings),
@@ -575,10 +608,7 @@ class TestPrepareWorkspaceRecovery:
                 "forge.workflow.nodes.workspace_setup.GitOperations",
                 side_effect=[old_git, new_git],
             ),
-            patch(
-                "forge.workflow.nodes.workspace_setup.shutil.rmtree",
-                side_effect=transient_rmtree,
-            ),
+            patch.object(WorkspaceManager, "remove_path", side_effect=transient_remove),
             patch("forge.workflow.nodes.workspace_setup.time.sleep") as sleep,
         ):
             result_path, result_git = prepare_workspace(state)
@@ -607,10 +637,10 @@ class TestPrepareWorkspaceRecovery:
         settings = MagicMock(workspace_base_dir=str(tmp_path))
         real_rmtree = shutil.rmtree
 
-        def persistent_rmtree(path, *args, **kwargs):
+        def persistent_remove(path):
             if Path(path).name.startswith(f".{workspace_path.name}-old-"):
                 raise OSError(errno.ENOTEMPTY, "Directory not empty", path)
-            return real_rmtree(path, *args, **kwargs)
+            return real_rmtree(path)
 
         with (
             patch("forge.workflow.nodes.workspace_setup.get_settings", return_value=settings),
@@ -618,10 +648,7 @@ class TestPrepareWorkspaceRecovery:
                 "forge.workflow.nodes.workspace_setup.GitOperations",
                 side_effect=[old_git, new_git],
             ),
-            patch(
-                "forge.workflow.nodes.workspace_setup.shutil.rmtree",
-                side_effect=persistent_rmtree,
-            ),
+            patch.object(WorkspaceManager, "remove_path", side_effect=persistent_remove),
             patch("forge.workflow.nodes.workspace_setup.time.sleep"),
             caplog.at_level("WARNING"),
         ):

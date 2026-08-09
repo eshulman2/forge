@@ -8,6 +8,7 @@ import pytest
 from forge.models.events import EventSource
 from forge.orchestrator.worker import (
     OrchestratorWorker,
+    _cleanup_terminal_workspace,
     _has_new_reportable_error,
     _report_new_workflow_error,
 )
@@ -25,6 +26,44 @@ from forge.queue.models import QueueMessage
 )
 def test_has_new_reportable_error(result: dict, error_before_invoke: str | None, expected: bool):
     assert _has_new_reportable_error(result, error_before_invoke) is expected
+
+
+@pytest.mark.asyncio
+async def test_terminal_workflow_cleans_recreated_workspace():
+    result = {
+        "ticket_key": "TEST-1",
+        "current_node": "complete",
+        "workspace_path": "/tmp/forge-TEST-1-repo",
+        "is_paused": False,
+    }
+    torn_down = {
+        **result,
+        "workspace_path": None,
+        "current_node": "workspace_complete",
+    }
+
+    with patch(
+        "forge.orchestrator.worker.teardown_workspace",
+        AsyncMock(return_value=torn_down),
+    ) as teardown:
+        cleaned = await _cleanup_terminal_workspace(result)
+
+    teardown.assert_awaited_once_with(result)
+    assert cleaned["workspace_path"] is None
+    assert cleaned["current_node"] == "complete"
+
+
+@pytest.mark.asyncio
+async def test_nonterminal_workflow_keeps_workspace():
+    result = {
+        "current_node": "human_review_gate",
+        "workspace_path": "/tmp/forge-TEST-1-repo",
+    }
+
+    with patch("forge.orchestrator.worker.teardown_workspace", AsyncMock()) as teardown:
+        assert await _cleanup_terminal_workspace(result) is result
+
+    teardown.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -957,7 +996,9 @@ class TestEnsureSkillsIntegration:
         """
         ensure_skills_called = False
 
-        async def fake_ensure_skills_no_property(project_key, jira_client, _skills_dir, **_kw) -> None:
+        async def fake_ensure_skills_no_property(
+            project_key, jira_client, _skills_dir, **_kw
+        ) -> None:
             """Simulate ensure_skills when forge.skills property is absent (returns None)."""
             nonlocal ensure_skills_called
             ensure_skills_called = True

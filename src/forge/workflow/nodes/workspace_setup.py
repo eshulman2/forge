@@ -45,7 +45,7 @@ def _remove_workspace_backup(path: Path) -> None:
     """Remove a replaced workspace, tolerating short-lived filesystem races."""
     for attempt in range(1, _BACKUP_CLEANUP_ATTEMPTS + 1):
         try:
-            shutil.rmtree(path)
+            WorkspaceManager.remove_path(path)
             return
         except FileNotFoundError:
             return
