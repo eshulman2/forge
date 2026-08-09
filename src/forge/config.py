@@ -250,6 +250,16 @@ class Settings(BaseSettings):
         return "anthropic"
 
     @model_validator(mode="after")
+    def validate_container_timeouts(self) -> "Settings":
+        """Ensure per-command timeout fits within the container lifetime."""
+        if self.container_command_timeout > self.container_timeout:
+            raise ValueError(
+                f"container_command_timeout ({self.container_command_timeout}s) must not "
+                f"exceed container_timeout ({self.container_timeout}s)"
+            )
+        return self
+
+    @model_validator(mode="after")
     def validate_llm_configuration(self) -> "Settings":
         """Fail at startup when the selected backend cannot serve its models."""
         from forge.models.model_policy import ModelPolicyResolver

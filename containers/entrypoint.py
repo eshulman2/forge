@@ -196,6 +196,7 @@ def run_tests(workspace: Path, test_command: str) -> bool:
     """Run tests and return True if they pass."""
     logger.info(f"Running tests: {test_command}")
 
+    timeout = command_timeout(600)
     try:
         result = subprocess.run(
             test_command,
@@ -203,7 +204,7 @@ def run_tests(workspace: Path, test_command: str) -> bool:
             cwd=workspace,
             capture_output=True,
             text=True,
-            timeout=command_timeout(600),
+            timeout=timeout,
         )
 
         if result.returncode == 0:
@@ -216,7 +217,7 @@ def run_tests(workspace: Path, test_command: str) -> bool:
             return False
 
     except subprocess.TimeoutExpired:
-        logger.error("Tests timed out after %d seconds", command_timeout(600))
+        logger.error("Tests timed out after %d seconds", timeout)
         return False
     except Exception as e:
         logger.error(f"Error running tests: {e}")
@@ -737,7 +738,7 @@ async def run_reviewer_agent(
         root_dir=str(workspace),
         inherit_env=True,
         virtual_mode=False,
-        timeout=command_timeout(300),
+        timeout=command_timeout(600),
     )
 
     system_prompt = f"""You are a code reviewer agent. Your job is to review the implementation and provide a verdict.
