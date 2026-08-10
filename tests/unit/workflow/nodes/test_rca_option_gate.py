@@ -5,8 +5,10 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from langgraph.graph import END
 
+from forge.integrations.jira.client import JiraClient
 from forge.models.workflow import ForgeLabel
 from forge.workflow.nodes.rca_option_gate import (
+    _format_rca_comment,
     rca_option_gate,
     regenerate_rca,
     route_rca_option,
@@ -48,6 +50,31 @@ def _make_mock_jira():
 
 
 class TestRcaOptionGate:
+    def test_option_fields_convert_to_distinct_adf_blocks(self):
+        """Option details do not collapse into one paragraph in Jira."""
+        state = make_rca_option_state()
+
+        comment = _format_rca_comment(state["rca_content"], state["rca_options"])
+        adf = JiraClient._text_to_adf(comment)
+
+        option_heading_index = next(
+            i
+            for i, block in enumerate(adf["content"])
+            if block["type"] == "heading"
+            and block["content"][0]["text"] == "Option 1: Option A"
+        )
+        option_blocks = adf["content"][option_heading_index : option_heading_index + 4]
+
+        assert [block["type"] for block in option_blocks] == [
+            "heading",
+            "paragraph",
+            "paragraph",
+            "paragraph",
+        ]
+        assert option_blocks[1]["content"][0]["text"] == "Fix the null check"
+        assert option_blocks[2]["content"][0]["text"] == "Tradeoffs"
+        assert option_blocks[3]["content"][0]["text"] == "Low risk"
+
     @pytest.mark.asyncio
     async def test_posts_jira_comment_with_rca_and_options(self):
         """rca_option_gate posts comment containing RCA content and all options."""

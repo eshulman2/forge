@@ -85,9 +85,9 @@ def _format_rca_comment(
         Formatted comment string, truncated if necessary.
     """
     options_text = "\n\n".join(
-        f"**Option {i + 1}: {opt.get('title', '')}**\n"
-        f"{opt.get('description', '')}\n"
-        f"*Tradeoffs:* {opt.get('tradeoffs', '')}"
+        f"### Option {i + 1}: {opt.get('title', '')}\n\n"
+        f"{opt.get('description', '')}\n\n"
+        f"**Tradeoffs**\n\n{opt.get('tradeoffs', '')}"
         for i, opt in enumerate(rca_options)
     )
 
