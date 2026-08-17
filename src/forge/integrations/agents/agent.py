@@ -485,9 +485,7 @@ class ForgeAgent:
             checkpointer=self._checkpointer,
             tools=mcp_tools if mcp_tools else None,
             middleware=[
-                HostToolAllowlistMiddleware(
-                    set(builtin_tools) | {tool.name for tool in mcp_tools}
-                )
+                HostToolAllowlistMiddleware(set(builtin_tools) | {tool.name for tool in mcp_tools})
             ],
             permissions=[FilesystemPermission(operations=["write"], paths=["/**"], mode="deny")],
         )
