@@ -18,7 +18,7 @@ from forge.api.routes.metrics import (
     record_workflow_started,
 )
 from forge.config import get_settings
-from forge.integrations.agents.security import refresh_agent_skills, validate_agent_root
+from forge.integrations.agents.security import initialize_agent_skills, validate_agent_root
 from forge.integrations.github.client import GitHubClient
 from forge.integrations.github.comment_signature import is_self_comment, resolve_bot_login
 from forge.integrations.jira.client import JiraClient
@@ -28,7 +28,6 @@ from forge.orchestrator.checkpointer import get_checkpointer, get_ticket_from_pr
 from forge.queue.consumer import QueueConsumer
 from forge.queue.models import QueueMessage
 from forge.skills.orchestrator import ensure_skills
-from forge.skills.resolver import resolve_skill_paths
 from forge.skills.utils import extract_project_key
 from forge.utils.redaction import redact_secrets
 from forge.workflow.nodes.error_handler import notify_error
@@ -322,23 +321,6 @@ class OrchestratorWorker:
                 jira_client,
                 skills_dir,
                 skills_install_dir=self.settings.skills_install_dir,
-            )
-            project_root = Path(os.environ.get("FORGE_PROJECT_ROOT", Path.cwd())).resolve()
-            agent_root = validate_agent_root(
-                Path(self.settings.agent_root_dir),
-                project_root,
-                self.settings.workspace_base_dir or "",
-            )
-            refresh_agent_skills(
-                agent_root,
-                [
-                    Path(path)
-                    for path in resolve_skill_paths(
-                        ticket_key,
-                        skills_dir,
-                        skills_install_dir=self.settings.skills_install_dir,
-                    )
-                ],
             )
         except Exception:
             logger.warning(
@@ -2178,6 +2160,15 @@ class OrchestratorWorker:
         from forge.utils.logging import log_startup_banner
 
         log_startup_banner("Queue Worker")
+
+        project_root = Path(os.environ.get("FORGE_PROJECT_ROOT", Path.cwd())).resolve()
+        agent_root = validate_agent_root(
+            Path(self.settings.agent_root_dir),
+            project_root,
+            self.settings.workspace_base_dir or "",
+        )
+        initialize_agent_skills(agent_root, project_root / self.settings.skills_dir)
+        logger.info("Host agent skills initialized at %s", agent_root / "skills")
 
         # Start Prometheus metrics HTTP server
         if self.settings.worker_metrics_enabled:
