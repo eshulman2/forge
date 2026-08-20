@@ -33,6 +33,7 @@ except ImportError:
 
 from forge.config import Settings, get_settings
 from forge.integrations.agents.security import (
+    PROHIBITED_BUILTIN_TOOLS,
     HostToolAllowlistMiddleware,
     operational_subprocess_env,
     parse_host_tools,
@@ -393,6 +394,14 @@ class ForgeAgent:
             for item in self.settings.agent_mcp_allowed_tools.split(",")
             if item.strip()
         }
+        collisions = {
+            identifier
+            for identifier in allowed
+            if identifier.rpartition(":")[2] in PROHIBITED_BUILTIN_TOOLS
+        }
+        if collisions:
+            names = ", ".join(sorted(collisions))
+            raise ValueError(f"MCP tool names collide with prohibited host tools: {names}")
         for server_name, server_config in mcp_config.items():
             try:
                 client = MultiServerMCPClient({server_name: server_config})
