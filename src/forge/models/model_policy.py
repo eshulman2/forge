@@ -35,7 +35,9 @@ class ModelConnection(BaseModel):
         if self.backend == "openai-compatible":
             parsed = urlparse(self.base_url or "")
             if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-                raise ValueError("openai-compatible connections require an absolute HTTP(S) base_url")
+                raise ValueError(
+                    "openai-compatible connections require an absolute HTTP(S) base_url"
+                )
             if self.api_key_env and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", self.api_key_env):
                 raise ValueError("api_key_env must be a valid environment variable name")
         return self

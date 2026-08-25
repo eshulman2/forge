@@ -183,9 +183,7 @@ def test_openai_compatible_connection_flows_endpoint_without_secret() -> None:
 def test_openai_compatible_connection_requires_http_url(base_url: str) -> None:
     with pytest.raises(ValueError, match="absolute HTTP.*base_url"):
         ModelPolicyResolver(
-            connections={
-                "gateway": {"backend": "openai-compatible", "base_url": base_url}
-            },
+            connections={"gateway": {"backend": "openai-compatible", "base_url": base_url}},
             policy={},
             default={"connection": "gateway", "model": "custom-model"},
         )

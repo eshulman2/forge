@@ -157,9 +157,7 @@ class ForgeAgent:
             api_key = self.settings.google_api_key.get_secret_value()
             if api_key and not os.environ.get("GOOGLE_API_KEY"):
                 os.environ["GOOGLE_API_KEY"] = api_key
-        elif self.settings.llm_backend == "anthropic" and not os.environ.get(
-            "ANTHROPIC_API_KEY"
-        ):
+        elif self.settings.llm_backend == "anthropic" and not os.environ.get("ANTHROPIC_API_KEY"):
             api_key = self.settings.anthropic_api_key.get_secret_value()
             if api_key:
                 os.environ["ANTHROPIC_API_KEY"] = api_key

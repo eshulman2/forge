@@ -442,9 +442,7 @@ def _create_llm_model(max_tokens_default: int = 16384):
         else:
             from langchain_google_vertexai.model_garden import ChatAnthropicVertex
 
-            logger.info(
-                f"Using Vertex AI Anthropic model: {model_name}, max_tokens={max_tokens}"
-            )
+            logger.info(f"Using Vertex AI Anthropic model: {model_name}, max_tokens={max_tokens}")
             model = ChatAnthropicVertex(
                 model_name=model_name,
                 project=vertex_project,
