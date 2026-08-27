@@ -50,6 +50,13 @@ class BaseState(TypedDict, total=False):
     workflow_project_key: str
     workflow_transition_count: int
 
+    # Generic node-contract capabilities and durable precondition audit trail.
+    # Missing capability keys preserve legacy inference; explicit booleans are
+    # authoritative for newer workflows.
+    capabilities: dict[str, bool]
+    precondition_result: dict[str, Any]
+    precondition_history: list[dict[str, Any]]
+
 
 class HandoffState(TypedDict):
     """Durable task-continuity summary for one repository."""

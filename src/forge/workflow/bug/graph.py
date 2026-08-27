@@ -9,6 +9,7 @@ from typing import Literal
 from langgraph.graph import END, StateGraph
 
 from forge.workflow.bug.state import BugState
+from forge.workflow.node_contracts import contracted_node
 from forge.workflow.nodes.docs_updater import update_documentation
 from forge.workflow.nodes.human_review import route_human_review
 from forge.workflow.nodes.implementation import implement_task
@@ -392,14 +393,14 @@ def build_bug_graph() -> StateGraph:
     graph.add_node("answer_question", _answer_question_bug)
 
     # ── Implementation stage ──
-    graph.add_node("setup_workspace", setup_workspace)
+    graph.add_node("setup_workspace", contracted_node("setup_workspace", setup_workspace))
     # Use the container-based implement_task (same as feature workflow) so the
     # fix runs inside an isolated Podman container with full tool access.
     # implement_bug_fix (ForgeAgent-based) is kept only for route_entry backward compat.
     graph.add_node("implement_bug_fix", _implement_task_bug)
     graph.add_node("local_review", _local_review_bug)
     graph.add_node("update_documentation", update_documentation)
-    graph.add_node("create_pr", create_pull_request)
+    graph.add_node("create_pr", contracted_node("create_pr", create_pull_request))
     graph.add_node("teardown_workspace", teardown_and_route)
 
     # ── Post-PR nodes (CI/review) - shared across all workflows ──

@@ -12,6 +12,8 @@ from typing import Any
 
 from langgraph.graph import END, StateGraph
 
+from forge.workflow.node_contracts import contracted_node
+
 logger = logging.getLogger(__name__)
 
 
@@ -65,7 +67,7 @@ def add_post_pr_nodes(graph: StateGraph) -> None:
     from forge.workflow.nodes.implement_review import implement_review, review_response_gate
     from forge.workflow.nodes.rebase import rebase_pr
 
-    graph.add_node("ci_evaluator", evaluate_ci_status)
+    graph.add_node("ci_evaluator", contracted_node("ci_evaluator", evaluate_ci_status))
     graph.add_node("attempt_ci_fix", attempt_ci_fix)
     graph.add_node("escalate_blocked", escalate_to_blocked)
     graph.add_node("human_review_gate", human_review_gate)

@@ -78,6 +78,16 @@ nodes and routers come from a static allowlist, unreachable nodes and unguarded 
 and executions are limited to 100 LangGraph transitions per invocation and 500 transitions per
 checkpoint lifetime. Existing node-level repository restrictions and sandboxing continue to apply.
 
+Allowlisted nodes may also carry built-in precondition contracts. Forge evaluates these before
+running a node and records decisions in `precondition_history`. Contracts are shared with built-in
+graphs: workspace setup requires a resolved repository, pull-request creation requires a repository
+and workspace, and CI evaluation requires an existing pull request. Missing structural inputs block
+before the node performs external side effects.
+
+Lifecycle capabilities are tri-state. An absent capability preserves compatibility with existing
+checkpoints; an explicit `true` or `false` value is authoritative. This permits safe optional PR and
+CI stages once implementation has durably recorded whether code changes and a PR are expected.
+
 Use these commands to inspect or remove definitions:
 
 ```bash

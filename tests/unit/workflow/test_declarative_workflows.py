@@ -19,6 +19,12 @@ from forge.workflow.declarative.resolver import (
     selected_workflow_name,
 )
 from forge.workflow.declarative.workflow import DeclarativeWorkflow
+from forge.workflow.preconditions import (
+    CapabilityName,
+    NodeContract,
+    PreconditionAction,
+    Requirement,
+)
 
 
 def definition_value(
@@ -93,6 +99,49 @@ async def test_runtime_transition_budget_blocks_before_side_effect() -> None:
 
     assert result["is_blocked"] is True
     assert "exceeded 500 transitions" in result["last_error"]
+
+
+@pytest.mark.asyncio
+async def test_guarded_node_enforces_opt_in_contract_before_side_effect() -> None:
+    called = False
+
+    async def create_pr(state: dict) -> dict:
+        nonlocal called
+        called = True
+        return state
+
+    contract = NodeContract(
+        requires=(Requirement(CapabilityName.CODE_CHANGES, PreconditionAction.SKIP),)
+    )
+    node = DeclarativeWorkflowCompiler._guarded_node(
+        create_pr,
+        "create_pr",
+        terminal=False,
+        contract=contract,
+    )
+
+    result = await node({"ticket_key": "PROJ-1"})
+
+    assert called is False
+    assert result["precondition_result"]["action"] == "skip"
+    assert result["workflow_transition_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_guarded_node_without_contract_remains_backward_compatible() -> None:
+    async def node(state: dict) -> dict:
+        return {**state, "called": True}
+
+    guarded = DeclarativeWorkflowCompiler._guarded_node(
+        node,
+        "generate_prd",
+        terminal=False,
+    )
+
+    result = await guarded({"ticket_key": "PROJ-1"})
+
+    assert result["called"] is True
+    assert "precondition_result" not in result
 
 
 def test_rejects_unknown_node_and_unreachable_node() -> None:

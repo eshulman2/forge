@@ -19,6 +19,7 @@ from forge.workflow.gates import (
     spec_approval_gate,
     task_approval_gate,
 )
+from forge.workflow.node_contracts import contracted_node
 from forge.workflow.nodes import (
     aggregate_epic_status,
     aggregate_feature_status,
@@ -404,9 +405,9 @@ def build_feature_graph() -> StateGraph:
 
     # Execution nodes (US6)
     graph.add_node("task_router", route_tasks_by_repo)
-    graph.add_node("setup_workspace", setup_workspace)
+    graph.add_node("setup_workspace", contracted_node("setup_workspace", setup_workspace))
     graph.add_node("implement_task", implement_task)
-    graph.add_node("create_pr", create_pull_request)
+    graph.add_node("create_pr", contracted_node("create_pr", create_pull_request))
     graph.add_node("teardown_workspace", teardown_and_route)
 
     # Local code review node (pre-PR, fixes breaking issues in-place)

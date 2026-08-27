@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
+
+from forge.workflow.node_contracts import contracts_for
+from forge.workflow.preconditions import NodeContract
 
 
 @dataclass(frozen=True)
@@ -14,6 +17,7 @@ class StateProfile:
     nodes: dict[str, Any]
     routers: dict[str, Any]
     pause_nodes: frozenset[str]
+    contracts: dict[str, NodeContract] = field(default_factory=dict)
 
 
 def _common_nodes() -> dict[str, Callable[..., Any]]:
@@ -170,7 +174,14 @@ def get_state_profile(name: str) -> StateProfile:
             "spec_approval_gate",
             "task_approval_gate",
         }
-        return StateProfile(FeatureState, create_initial_feature_state, nodes, routers, pauses)
+        return StateProfile(
+            FeatureState,
+            create_initial_feature_state,
+            nodes,
+            routers,
+            pauses,
+            contracts_for(nodes),
+        )
 
     if name == "bug":
         from forge.workflow.bug.graph import (
@@ -242,7 +253,14 @@ def get_state_profile(name: str) -> StateProfile:
             "route_triage_gate": route_triage_gate,
         }
         pauses = common_pauses | {"triage_gate", "rca_option_gate", "plan_approval_gate"}
-        return StateProfile(BugState, create_initial_bug_state, nodes, routers, pauses)
+        return StateProfile(
+            BugState,
+            create_initial_bug_state,
+            nodes,
+            routers,
+            pauses,
+            contracts_for(nodes),
+        )
 
     if name == "task_takeover":
         from forge.workflow.gates import route_task_plan_approval, task_plan_approval_gate
@@ -302,6 +320,7 @@ def get_state_profile(name: str) -> StateProfile:
             nodes,
             routers,
             pauses,
+            contracts_for(nodes),
         )
 
     raise ValueError(f"unknown state profile: {name}")

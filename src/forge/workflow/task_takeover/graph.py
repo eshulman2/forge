@@ -14,6 +14,7 @@ from forge.workflow.gates.task_plan_approval import (
     route_task_plan_approval,
     task_plan_approval_gate,
 )
+from forge.workflow.node_contracts import contracted_node
 from forge.workflow.nodes import (
     answer_question,
     create_pull_request,
@@ -260,10 +261,10 @@ def build_task_takeover_graph() -> StateGraph[TaskTakeoverState, Any, Any]:
     graph.add_node("generate_plan", generate_plan)
     graph.add_node("task_plan_approval_gate", task_plan_approval_gate)
     graph.add_node("answer_question", answer_question)
-    graph.add_node("setup_workspace", setup_workspace)
+    graph.add_node("setup_workspace", contracted_node("setup_workspace", setup_workspace))
     graph.add_node("execute_task_changes", execute_task_changes)
     graph.add_node("run_qualitative_review", run_qualitative_review)
-    graph.add_node("create_pr", create_pull_request)
+    graph.add_node("create_pr", contracted_node("create_pr", create_pull_request))
     graph.add_node("teardown_workspace", teardown_and_route)
     graph.add_node("complete_task_takeover", complete_task_takeover)
 

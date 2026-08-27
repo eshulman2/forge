@@ -10,6 +10,7 @@ from langgraph.graph import END, StateGraph
 
 from forge.workflow.declarative.catalog import get_state_profile
 from forge.workflow.declarative.models import MAX_TRANSITIONS, WorkflowDefinition
+from forge.workflow.preconditions import NodeContract, with_preconditions
 
 
 class WorkflowValidationError(ValueError):
@@ -108,6 +109,7 @@ class DeclarativeWorkflowCompiler:
                     self.profile.nodes[node_name],
                     node_name,
                     terminal=step.next == "__end__",
+                    contract=self.profile.contracts.get(node_name),
                 ),
             )
         graph.set_entry_point("_forge_entry")
@@ -151,8 +153,14 @@ class DeclarativeWorkflowCompiler:
 
     @staticmethod
     def _guarded_node(
-        func: Callable[..., Any], node_name: str, *, terminal: bool
+        func: Callable[..., Any],
+        node_name: str,
+        *,
+        terminal: bool,
+        contract: NodeContract | None = None,
     ) -> Callable[..., Awaitable[dict[str, Any]]]:
+        guarded_func = with_preconditions(func, contract, node_name=node_name)
+
         async def run(state: dict[str, Any]) -> dict[str, Any]:
             transitions = int(state.get("workflow_transition_count", 0)) + 1
             if transitions > MAX_TRANSITIONS:
@@ -163,9 +171,7 @@ class DeclarativeWorkflowCompiler:
                     "is_blocked": True,
                     "last_error": f"Declarative workflow exceeded {MAX_TRANSITIONS} transitions",
                 }
-            result = func(state)
-            if inspect.isawaitable(result):
-                result = await result
+            result = await guarded_func(state)
             if not isinstance(result, dict):
                 raise TypeError(f"node '{node_name}' must return a state dictionary")
             if terminal and not any(
