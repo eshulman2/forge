@@ -888,6 +888,9 @@ class JiraClient:
             and label != ForgeLabel.FORGE_MANAGED.value
             and label != "forge:managed:task"
             and label != "forge:managed:task-takeover"
+            # A declarative workflow label identifies the graph definition. It
+            # is not a transient phase label and must survive phase changes.
+            and not label.startswith("forge:workflow:")
         ]
 
         # Build update operations

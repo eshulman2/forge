@@ -295,6 +295,29 @@ class TestJiraClientLabels:
         assert any(op["remove"] == "forge:prd-pending" for op in remove_ops)
         assert any(op["add"] == ForgeLabel.PRD_APPROVED.value for op in add_ops)
 
+    @pytest.mark.asyncio
+    async def test_set_workflow_label_preserves_declarative_workflow_identity(self, mock_client):
+        mock_client.get_labels = AsyncMock(
+            return_value=[
+                "forge:managed",
+                "forge:workflow:planning-smoke",
+                "forge:prd-pending",
+            ]
+        )
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(mock_client, "_get_client") as mock_get_client:
+            mock_http = AsyncMock()
+            mock_http.put = AsyncMock(return_value=mock_response)
+            mock_get_client.return_value = mock_http
+
+            await mock_client.set_workflow_label("TEST-123", ForgeLabel.PRD_APPROVED)
+
+        operations = mock_http.put.call_args.kwargs["json"]["update"]["labels"]
+        assert {"remove": "forge:workflow:planning-smoke"} not in operations
+        assert {"remove": "forge:prd-pending"} in operations
+
 
 class TestJiraClientArchiveIssue:
     """Tests for archive_issue method."""

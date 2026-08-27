@@ -28,6 +28,7 @@ from forge.workflow.utils.jira_status import post_status_comment
 from forge.workflow.utils.proposal_review_threads import reply_to_proposal_decisions
 from forge.workflow.utils.qa_summary import post_qa_summary_if_needed
 from forge.workflow.utils.references import fetch_and_inject_references
+from forge.workflow.utils.repo_resolution import ensure_repo_labels
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +118,8 @@ async def generate_spec(state: WorkflowState) -> WorkflowState:
                 "current_node": "generate_spec",
             }
 
+        resolved_repos = await ensure_repo_labels(jira, issue, prd_content)
+
         # Build context
         context: dict[str, Any] = {
             "ticket_key": ticket_key,
@@ -125,6 +128,7 @@ async def generate_spec(state: WorkflowState) -> WorkflowState:
             "event_type": state.get("event_type", ""),
             "event_source": state.get("context", {}).get("source", ""),
             "retry_count": state.get("retry_count", 0),
+            "available_repos": resolved_repos,
         }
 
         prd_content = await fetch_and_inject_references(state, jira, prd_content)

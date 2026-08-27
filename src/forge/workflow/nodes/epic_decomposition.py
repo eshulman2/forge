@@ -12,7 +12,8 @@ from forge.workflow.utils import update_state_timestamp
 from forge.workflow.utils.jira_status import post_status_comment
 from forge.workflow.utils.qa_summary import post_qa_summary_if_needed
 from forge.workflow.utils.references import fetch_and_inject_references
-from forge.workflow.utils.repo_resolution import get_effective_repos
+from forge.workflow.utils.repo_resolution import ensure_repo_labels, get_effective_repos
+from forge.workflow.utils.workflow_identity import workflow_identity_labels
 
 logger = logging.getLogger(__name__)
 
@@ -150,6 +151,13 @@ async def decompose_epics(state: WorkflowState) -> WorkflowState:
                 "current_node": "decompose_epics",
             }
 
+        await ensure_repo_labels(
+            jira,
+            parent_issue,
+            spec_content_with_refs,
+            [str(epic.get("repo", "")) for epic in epics_data],
+        )
+
         # Create Epics in Jira - secondary operation
         epics_by_repo: dict[str, list[str]] = {}
 
@@ -163,6 +171,7 @@ async def decompose_epics(state: WorkflowState) -> WorkflowState:
             labels = [
                 ForgeLabel.FORGE_MANAGED.value,
                 f"forge:parent:{ticket_key}",
+                *workflow_identity_labels(state),
             ]
             if repo and "/" in repo:
                 labels.append(f"repo:{repo}")

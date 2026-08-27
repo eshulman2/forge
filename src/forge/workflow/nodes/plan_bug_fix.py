@@ -22,7 +22,8 @@ from forge.workflow.utils import (
 )
 from forge.workflow.utils.jira_status import post_status_comment
 from forge.workflow.utils.references import fetch_and_inject_references
-from forge.workflow.utils.repo_resolution import get_effective_repos
+from forge.workflow.utils.repo_resolution import ensure_repo_labels, get_effective_repos
+from forge.workflow.utils.workflow_identity import workflow_identity_labels
 
 logger = logging.getLogger(__name__)
 
@@ -163,6 +164,13 @@ async def _run_plan_container(
 
             new_plan = _harvest_plan(workspace_path)
 
+        resolved_repos = await ensure_repo_labels(
+            jira,
+            issue,
+            new_plan,
+            list(state.get("repos_to_process") or []),
+        )
+
         comment = _truncate_plan_comment(new_plan)
         comment = f"{comment}\n\n{artifact_interaction_options('plan')}"
         await jira.add_comment(ticket_key, comment)
@@ -172,6 +180,7 @@ async def _run_plan_container(
             {
                 **state,
                 "plan_content": new_plan,
+                "repos_to_process": resolved_repos,
                 "current_node": "plan_approval_gate",
                 "last_error": None,
                 "retry_count": 0,
@@ -358,6 +367,7 @@ async def decompose_plan(state: BugState) -> BugState:
                         f"repo:{repo}",
                         ForgeLabel.FORGE_MANAGED.value,
                         f"forge:parent:{ticket_key}",
+                        *workflow_identity_labels(state),
                     ],
                 )
                 await jira.create_issue_link("Related", task_key, ticket_key)

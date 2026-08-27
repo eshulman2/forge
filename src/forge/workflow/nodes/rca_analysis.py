@@ -13,7 +13,7 @@ from forge.sandbox import ContainerRunner
 from forge.workflow.bug.state import BugState
 from forge.workflow.utils import merge_review_exhaustion, update_state_timestamp
 from forge.workflow.utils.jira_status import post_status_comment
-from forge.workflow.utils.repo_resolution import get_effective_repos
+from forge.workflow.utils.repo_resolution import ensure_repo_labels, get_effective_repos
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +86,12 @@ async def analyze_bug(state: BugState) -> BugState:
                 "last_error": str(e),
                 "current_node": "analyze_bug",
             }
+
+        await ensure_repo_labels(
+            jira,
+            issue,
+            "\n\n".join([issue.summary or "", issue.description or ""]),
+        )
 
         task_description = load_prompt(
             "analyze-bug",

@@ -16,7 +16,7 @@ from forge.prompts import load_prompt
 from forge.workflow.task_takeover.state import TaskTakeoverState
 from forge.workflow.utils import update_state_timestamp
 from forge.workflow.utils.jira_status import post_status_comment
-from forge.workflow.utils.repo_resolution import resolve_current_repo
+from forge.workflow.utils.repo_resolution import ensure_repo_labels, resolve_current_repo
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +103,13 @@ async def triage_task(state: TaskTakeoverState) -> TaskTakeoverState:
         result_stripped = raw_result.strip()
         if result_stripped.lower() == "sufficient":
             if current_repo and "/" in current_repo:
-                await jira.add_labels(ticket_key, [f"repo:{current_repo}"])
+                await ensure_repo_labels(
+                    jira,
+                    issue,
+                    comment_text,
+                    [current_repo],
+                    issue_key=ticket_key,
+                )
 
             pass_msg = (
                 "Thanks for the update — ticket now has enough information to proceed. "

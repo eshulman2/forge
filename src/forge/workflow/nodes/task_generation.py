@@ -14,6 +14,7 @@ from forge.workflow.utils import update_state_timestamp
 from forge.workflow.utils.jira_status import post_status_comment
 from forge.workflow.utils.references import fetch_and_inject_references
 from forge.workflow.utils.repo_resolution import get_effective_default_repo
+from forge.workflow.utils.workflow_identity import workflow_identity_labels
 
 logger = logging.getLogger(__name__)
 
@@ -166,6 +167,7 @@ async def generate_tasks(state: WorkflowState) -> WorkflowState:
                 labels = [
                     ForgeLabel.FORGE_MANAGED.value,
                     f"forge:parent:{ticket_key}",  # Parent Feature key
+                    *workflow_identity_labels(state),
                 ]
                 if repo and repo != "unknown":
                     labels.append(f"repo:{repo}")
@@ -676,6 +678,7 @@ async def regenerate_epic_tasks(state: WorkflowState) -> WorkflowState:
             labels = [
                 ForgeLabel.FORGE_MANAGED.value,
                 f"forge:parent:{ticket_key}",
+                *workflow_identity_labels(state),
             ]
             if repo and repo != "unknown":
                 labels.append(f"repo:{repo}")

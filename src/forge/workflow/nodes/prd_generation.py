@@ -22,6 +22,7 @@ from forge.workflow.utils import update_state_timestamp
 from forge.workflow.utils.jira_status import post_status_comment
 from forge.workflow.utils.proposal_review_threads import reply_to_proposal_decisions
 from forge.workflow.utils.references import fetch_and_inject_references
+from forge.workflow.utils.repo_resolution import ensure_repo_labels
 
 logger = logging.getLogger(__name__)
 
@@ -147,6 +148,8 @@ async def generate_prd(state: WorkflowState) -> WorkflowState:
                 "current_node": "generate_prd",
             }
 
+        resolved_repos = await ensure_repo_labels(jira, issue, raw_requirements)
+
         raw_requirements = await fetch_and_inject_references(state, jira, raw_requirements)
 
         # Build context from issue metadata
@@ -159,6 +162,7 @@ async def generate_prd(state: WorkflowState) -> WorkflowState:
             "retry_count": state.get("retry_count", 0),
             "summary": issue.summary,
             "project_key": issue.project_key,
+            "available_repos": resolved_repos,
         }
 
         # Generate PRD using the configured LLM backend - primary operation

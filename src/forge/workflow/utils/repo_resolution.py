@@ -46,6 +46,18 @@ def repo_from_labels(labels: list[str]) -> str | None:
     return None
 
 
+def repos_from_labels(labels: list[str]) -> list[str]:
+    """Return all valid repository names encoded in repo labels."""
+    return list(
+        dict.fromkeys(
+            label[len(_REPO_LABEL_PREFIX) :].strip()
+            for label in labels
+            if label.startswith(_REPO_LABEL_PREFIX)
+            and "/" in label[len(_REPO_LABEL_PREFIX) :].strip()
+        )
+    )
+
+
 def repo_mentioned_in_text(text: str, known_repos: list[str]) -> str | None:
     """Infer repo from full repo name or unambiguous repo basename mentioned in ticket text."""
     if not text.strip() or not known_repos:
@@ -111,3 +123,47 @@ async def resolve_current_repo(
         return known_repos[0], known_repos
 
     return None, known_repos
+
+
+async def ensure_repo_labels(
+    jira: Any,
+    issue: Any,
+    artifact_text: str = "",
+    current_repos: list[str] | None = None,
+    issue_key: str | None = None,
+) -> list[str]:
+    """Resolve repositories with existing rules and persist them as Jira labels.
+
+    Explicit repositories supplied by a structured planning result are retained,
+    followed by valid labels already on the issue. When neither exists, this
+    delegates to ``resolve_current_repo`` so resolution precedence stays shared.
+    """
+    known_repos: list[str] = []
+    with contextlib.suppress(Exception):
+        known_repos = await get_effective_repos(jira, issue.project_key)
+
+    def accepted(repo: str) -> bool:
+        return "/" in repo and (not known_repos or repo in known_repos)
+
+    selected = [repo for repo in (current_repos or []) if accepted(repo)]
+    selected.extend(
+        repo
+        for repo in repos_from_labels(getattr(issue, "labels", []) or [])
+        if accepted(repo)
+    )
+
+    # Structured artifacts may identify several configured repositories.
+    artifact_lower = artifact_text.lower()
+    selected.extend(repo for repo in known_repos if repo.lower() in artifact_lower)
+    selected = list(dict.fromkeys(selected))
+
+    if not selected:
+        resolved, _ = await resolve_current_repo(jira, issue, artifact_text, None)
+        if resolved and accepted(resolved):
+            selected = [resolved]
+
+    existing = set(repos_from_labels(getattr(issue, "labels", []) or []))
+    labels_to_add = [f"{_REPO_LABEL_PREFIX}{repo}" for repo in selected if repo not in existing]
+    if labels_to_add:
+        await jira.add_labels(issue_key or issue.key, labels_to_add)
+    return selected
