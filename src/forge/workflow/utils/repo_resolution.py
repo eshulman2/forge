@@ -147,9 +147,7 @@ async def ensure_repo_labels(
 
     selected = [repo for repo in (current_repos or []) if accepted(repo)]
     selected.extend(
-        repo
-        for repo in repos_from_labels(getattr(issue, "labels", []) or [])
-        if accepted(repo)
+        repo for repo in repos_from_labels(getattr(issue, "labels", []) or []) if accepted(repo)
     )
 
     # Structured artifacts may identify several configured repositories.
