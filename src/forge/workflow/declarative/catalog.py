@@ -18,6 +18,7 @@ class StateProfile:
     routers: dict[str, Any]
     pause_nodes: frozenset[str]
     contracts: dict[str, NodeContract] = field(default_factory=dict)
+    router_outcomes: dict[str, frozenset[str]] = field(default_factory=dict)
 
 
 def _common_nodes() -> dict[str, Callable[..., Any]]:
@@ -32,7 +33,7 @@ def _common_nodes() -> dict[str, Callable[..., Any]]:
         rebase_pr,
         review_response_gate,
         setup_workspace,
-        teardown_and_route,
+        teardown_workspace,
         update_documentation,
     )
 
@@ -47,7 +48,10 @@ def _common_nodes() -> dict[str, Callable[..., Any]]:
         "rebase_pr": rebase_pr,
         "review_response_gate": review_response_gate,
         "setup_workspace": setup_workspace,
-        "teardown_workspace": teardown_and_route,
+        # Declarative workflows own their outgoing edge.  The built-in
+        # teardown_and_route node also selects the next repository (or the
+        # human-review gate), which would silently override the YAML topology.
+        "teardown_workspace": teardown_workspace,
         "update_documentation": update_documentation,
     }
 
@@ -183,6 +187,31 @@ def get_state_profile(name: str) -> StateProfile:
             routers,
             pauses,
             contracts_for(nodes),
+            {
+                "route_plan_approval": frozenset(
+                    {
+                        "answer_question",
+                        "generate_tasks",
+                        "regenerate_all_epics",
+                        "update_single_epic",
+                    }
+                ),
+                "route_prd_approval": frozenset(
+                    {"answer_question", "generate_spec", "regenerate_prd"}
+                ),
+                "route_spec_approval": frozenset(
+                    {"answer_question", "decompose_epics", "regenerate_spec"}
+                ),
+                "route_task_approval": frozenset(
+                    {
+                        "answer_question",
+                        "regenerate_all_tasks",
+                        "regenerate_epic_tasks",
+                        "task_router",
+                        "update_single_task",
+                    }
+                ),
+            },
         )
 
     if name == "bug":

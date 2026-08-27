@@ -42,6 +42,16 @@ class DeclarativeWorkflowCompiler:
                     f"router '{step.route}' on '{node_name}' is not registered for state "
                     f"'{spec.state}'"
                 )
+            if step.route and step.route in self.profile.router_outcomes:
+                declared = set(step.branches) - {"__end__"}
+                allowed = self.profile.router_outcomes[step.route]
+                invalid = declared - allowed
+                if invalid:
+                    raise WorkflowValidationError(
+                        f"router '{step.route}' on '{node_name}' has unknown outcome "
+                        f"'{sorted(invalid)[0]}'; allowed outcomes are "
+                        f"{', '.join(sorted(allowed))}"
+                    )
             targets = [step.next] if step.next else list(step.branches.values())
             for target in targets:
                 if target == "__end__":

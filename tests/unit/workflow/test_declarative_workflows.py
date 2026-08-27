@@ -7,6 +7,7 @@ import pytest
 from pydantic import ValidationError
 
 from forge.orchestrator.worker import OrchestratorWorker
+from forge.workflow.declarative.catalog import get_state_profile
 from forge.workflow.declarative.cli import cmd_workflow
 from forge.workflow.declarative.compiler import (
     DeclarativeWorkflowCompiler,
@@ -19,6 +20,7 @@ from forge.workflow.declarative.resolver import (
     selected_workflow_name,
 )
 from forge.workflow.declarative.workflow import DeclarativeWorkflow
+from forge.workflow.nodes.workspace_setup import teardown_workspace
 from forge.workflow.preconditions import (
     CapabilityName,
     NodeContract,
@@ -74,6 +76,27 @@ def test_compiles_allowlisted_node() -> None:
 
     assert "generate_prd" in graph.nodes
     assert "_forge_entry" in graph.nodes
+
+
+def test_declarative_teardown_does_not_use_builtin_repo_router() -> None:
+    assert get_state_profile("feature").nodes["teardown_workspace"] is teardown_workspace
+
+
+@pytest.mark.asyncio
+async def test_terminal_declarative_teardown_completes_without_hidden_stage() -> None:
+    value = definition_value(steps={"teardown_workspace": {"next": "__end__"}})
+    value["spec"]["entry"] = "teardown_workspace"
+    graph = DeclarativeWorkflowCompiler(load_workflow_value(value)).build_graph().compile()
+
+    result = await graph.ainvoke(
+        {
+            "ticket_key": "PROJ-1",
+            "current_node": "teardown_workspace",
+            "workspace_path": None,
+        }
+    )
+
+    assert result["current_node"] == "complete"
 
 
 @pytest.mark.asyncio
@@ -161,6 +184,37 @@ def test_rejects_unknown_node_and_unreachable_node() -> None:
         DeclarativeWorkflowCompiler(unreachable).validate()
 
 
+def test_rejects_unknown_registered_router_outcome() -> None:
+    value = definition_value(
+        steps={
+            "spec_approval_gate": {
+                "route": "route_spec_approval",
+                "branches": {"generate_tasks": "generate_prd"},
+            },
+            "generate_prd": {"next": "__end__"},
+        }
+    )
+    value["spec"]["entry"] = "spec_approval_gate"
+
+    with pytest.raises(WorkflowValidationError, match="unknown outcome 'generate_tasks'"):
+        DeclarativeWorkflowCompiler(load_workflow_value(value)).validate()
+
+
+def test_accepts_registered_router_outcome() -> None:
+    value = definition_value(
+        steps={
+            "spec_approval_gate": {
+                "route": "route_spec_approval",
+                "branches": {"decompose_epics": "generate_prd"},
+            },
+            "generate_prd": {"next": "__end__"},
+        }
+    )
+    value["spec"]["entry"] = "spec_approval_gate"
+
+    DeclarativeWorkflowCompiler(load_workflow_value(value)).validate()
+
+
 def test_rejects_unguarded_cycle_but_allows_gate_cycle() -> None:
     unsafe = load_workflow_value(
         definition_value(
@@ -183,7 +237,7 @@ def test_rejects_unguarded_cycle_but_allows_gate_cycle() -> None:
                     "route": "route_prd_approval",
                     "branches": {
                         "regenerate_prd": "generate_prd",
-                        "done": "__end__",
+                        "generate_spec": "__end__",
                     },
                 },
             }
