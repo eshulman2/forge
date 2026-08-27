@@ -1,0 +1,87 @@
+# Declarative workflows
+
+Forge project administrators can compose the nodes and state profiles shipped with Forge into
+project-specific workflows. Definitions are selected by Jira label, validated before compilation,
+and compiled into LangGraph graphs at runtime. They cannot import Python or define expressions.
+
+## Author and publish
+
+Create a YAML file locally:
+
+```yaml
+apiVersion: forge/v1
+kind: Workflow
+metadata:
+  name: prd-only
+  revision: 1
+  description: Generate a PRD and wait for approval
+spec:
+  state: feature
+  entry: generate_prd
+  steps:
+    generate_prd:
+      next: prd_approval_gate
+    prd_approval_gate:
+      route: route_prd_approval
+      branches:
+        generate_spec: __end__
+        regenerate_prd: generate_prd
+        answer_question: answer_question
+        __end__: __end__
+    answer_question:
+      next: prd_approval_gate
+```
+
+Validate and publish it:
+
+```bash
+forge workflow validate workflow.yaml
+forge workflow publish MYPROJ workflow.yaml
+```
+
+Publishing stores canonical JSON in the `forge.workflow.prd-only` Jira project property. Jira
+requires the credentials used by the command to have global or project administration permission.
+The canonical value must fit Jira's 32,768-byte project-property limit.
+
+Apply `forge:workflow:prd-only` to a ticket to select the workflow. With no such label, Forge uses
+its built-in ticket-type routing. Multiple workflow labels, missing definitions, or invalid
+definitions block execution instead of silently falling back.
+
+## Format
+
+- `metadata.name` is lowercase and becomes both the property and label suffix.
+- `metadata.revision` must increase whenever content changes.
+- `spec.state` is `feature`, `bug`, or `task_takeover` and controls the available node catalog.
+- Each step name is a canonical, registered Forge node. A step has either `next` or `route` with a
+  complete branch map. Use `__end__` to stop the current invocation.
+- Graphs may contain a cycle only when it crosses an approved human/CI pause boundary.
+- An active ticket keeps its workflow name but adopts newer revisions when it resumes.
+
+If a newer revision removes the node saved in a checkpoint, add an explicit migration:
+
+```yaml
+spec:
+  resume:
+    fromRevisions:
+      "1":
+        old_gate: replacement_gate
+```
+
+State-profile changes, revision rollback, and content changes without a revision increment are
+rejected. Removing the project property blocks active runs, so delete definitions only after their
+checkpoints have finished or been cleared.
+
+## Operational safeguards
+
+Definitions are strict and unknown fields are rejected. Runtime reads JSON rather than YAML, all
+nodes and routers come from a static allowlist, unreachable nodes and unguarded cycles are rejected,
+and executions are limited to 100 LangGraph transitions per invocation and 500 transitions per
+checkpoint lifetime. Existing node-level repository restrictions and sandboxing continue to apply.
+
+Use these commands to inspect or remove definitions:
+
+```bash
+forge workflow list MYPROJ
+forge workflow show MYPROJ prd-only
+forge workflow delete MYPROJ prd-only --yes
+```

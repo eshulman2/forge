@@ -42,6 +42,14 @@ class BaseState(TypedDict, total=False):
     messages: Annotated[list[Any], add_messages]
     context: dict[str, Any]
 
+    # Declarative workflow identity. Built-in workflows leave these unset.
+    workflow_name: str
+    workflow_revision: int
+    workflow_digest: str
+    workflow_state_profile: str
+    workflow_project_key: str
+    workflow_transition_count: int
+
 
 class HandoffState(TypedDict):
     """Durable task-continuity summary for one repository."""

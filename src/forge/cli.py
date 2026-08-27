@@ -30,7 +30,14 @@ async def _get_compiled_workflow_for_ticket(ticket_key: str):
     from forge.integrations.jira.client import JiraClient
     from forge.models.workflow import TicketType
     from forge.orchestrator.checkpointer import get_checkpointer
+    from forge.workflow.declarative.resolver import (
+        load_project_workflow,
+        selected_workflow_name,
+    )
+    from forge.workflow.declarative.workflow import DeclarativeWorkflow
     from forge.workflow.registry import create_default_router
+
+    checkpointer = await get_checkpointer()
 
     # Fetch ticket to determine type
     jira = JiraClient()
@@ -41,24 +48,42 @@ async def _get_compiled_workflow_for_ticket(ticket_key: str):
             ticket_type = TicketType(ticket_type_str)
         except ValueError:
             ticket_type = TicketType.FEATURE  # Default for unknown types
+        config = {"configurable": {"thread_id": ticket_key}}
+        raw_checkpoint = await checkpointer.aget(config)
+        values = raw_checkpoint.get("channel_values", {}) if raw_checkpoint else {}
+        workflow_name = values.get("workflow_name") or selected_workflow_name(issue.labels)
+        if workflow_name:
+            project_key = values.get("workflow_project_key") or issue.project_key
+            workflow_instance = await load_project_workflow(
+                jira, project_key or ticket_key.split("-", 1)[0], workflow_name
+            )
+        else:
+            workflow_instance = None
     finally:
         await jira.close()
 
     # Resolve workflow
-    router = create_default_router()
-    workflow_instance = router.resolve(
-        ticket_type=ticket_type,
-        labels=[],
-        event={},
-    )
+    if workflow_instance is None:
+        router = create_default_router()
+        workflow_instance = router.resolve(
+            ticket_type=ticket_type,
+            labels=issue.labels,
+            event={},
+        )
 
     if workflow_instance is None:
         raise ValueError(f"No workflow found for ticket type: {ticket_type}")
 
     # Build and compile
-    checkpointer = await get_checkpointer()
     graph = workflow_instance.build_graph()
     compiled_workflow = graph.compile(checkpointer=checkpointer)
+
+    if isinstance(workflow_instance, DeclarativeWorkflow):
+        state = await compiled_workflow.aget_state(config)
+        if state and state.values:
+            migrated = workflow_instance.migrate_state(dict(state.values))
+            if migrated != state.values:
+                await compiled_workflow.aupdate_state(config, migrated)
 
     return compiled_workflow, checkpointer
 
@@ -1664,6 +1689,34 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
 
+    # Declarative workflow management. YAML is a local authoring format;
+    # Jira stores the validated canonical JSON representation.
+    workflow_parser = subparsers.add_parser(
+        "workflow", help="Validate and manage project-scoped workflows"
+    )
+    workflow_subparsers = workflow_parser.add_subparsers(dest="workflow_command")
+
+    workflow_validate = workflow_subparsers.add_parser("validate", help="Validate a YAML file")
+    workflow_validate.add_argument("file")
+    workflow_validate.add_argument("--json", action="store_true", help="Print canonical JSON")
+
+    workflow_publish = workflow_subparsers.add_parser("publish", help="Publish a YAML workflow")
+    workflow_publish.add_argument("project_key")
+    workflow_publish.add_argument("file")
+
+    workflow_show = workflow_subparsers.add_parser("show", help="Show one project workflow")
+    workflow_show.add_argument("project_key")
+    workflow_show.add_argument("name")
+    workflow_show.add_argument("--json", action="store_true")
+
+    workflow_list = workflow_subparsers.add_parser("list", help="List project workflows")
+    workflow_list.add_argument("project_key")
+
+    workflow_delete = workflow_subparsers.add_parser("delete", help="Delete a project workflow")
+    workflow_delete.add_argument("project_key")
+    workflow_delete.add_argument("name")
+    workflow_delete.add_argument("--yes", action="store_true", help="Confirm deletion")
+
     # project-setup command
     setup_parser = subparsers.add_parser(
         "project-setup",
@@ -1900,6 +1953,14 @@ Examples:
             return asyncio.run(skills_handler(args))
         skills_parser.print_help()
         return 0
+
+    if args.command == "workflow":
+        if getattr(args, "workflow_command", None) is None:
+            workflow_parser.print_help()
+            return 0
+        from forge.workflow.declarative.cli import cmd_workflow
+
+        return asyncio.run(cmd_workflow(args))
 
     # Map commands to async handlers
     handlers = {

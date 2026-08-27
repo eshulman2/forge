@@ -46,6 +46,7 @@ nav = [
   {"Reference" = [
     {"API Endpoints" = "reference/api.md"},
     {"Configuration" = "reference/config.md"},
+    {"Declarative Workflows" = "reference/declarative-workflows.md"},
     {"Proposals" = "reference/proposals.md"},
     {"review.md Schema" = "reference/review-md-schema.md"},
   ]},

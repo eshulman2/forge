@@ -29,6 +29,11 @@ from forge.queue.models import QueueMessage
 from forge.skills.orchestrator import ensure_skills
 from forge.skills.utils import extract_project_key
 from forge.utils.redaction import redact_secrets
+from forge.workflow.declarative.resolver import (
+    load_project_workflow,
+    selected_workflow_name,
+)
+from forge.workflow.declarative.workflow import DeclarativeWorkflow
 from forge.workflow.nodes.error_handler import notify_error
 from forge.workflow.nodes.workspace_setup import teardown_workspace
 from forge.workflow.pr_state import (
@@ -346,11 +351,29 @@ class OrchestratorWorker:
             # Determine ticket type early to select workflow
             ticket_type = self._extract_ticket_type(message)
 
-            workflow_instance = None
+            workflow_instance: Any = None
             existing_state = None
-            config = {"configurable": {"thread_id": ticket_key}}
+            config: dict[str, Any] = {"configurable": {"thread_id": ticket_key}}
 
-            if ticket_type == TicketType.UNKNOWN:
+            labels = message.payload.get("issue", {}).get("fields", {}).get("labels", []) or []
+            try:
+                custom_workflow = await self._resolve_custom_workflow(ticket_key, labels)
+            except Exception as exc:
+                await self._report_custom_workflow_configuration_error(ticket_key, str(exc))
+                return
+
+            if custom_workflow is not None:
+                if not custom_workflow.supports_ticket_type(ticket_type):
+                    await self._report_custom_workflow_configuration_error(
+                        ticket_key,
+                        f"workflow '{custom_workflow.name}' uses state profile "
+                        f"'{custom_workflow.definition.spec.state}', which is incompatible with "
+                        f"ticket type '{ticket_type.value}'",
+                    )
+                    return
+                workflow_instance = custom_workflow
+                config["recursion_limit"] = 100
+            elif ticket_type == TicketType.UNKNOWN:
                 # GitHub events (and other non-Jira sources) don't carry ticket type.
                 # Find the workflow by scanning checkpoint state across all registered workflows.
                 workflow_instance, existing_state = await self._find_workflow_by_state(ticket_key)
@@ -371,7 +394,6 @@ class OrchestratorWorker:
                 )
             else:
                 # Use router to resolve which workflow to use
-                labels = message.payload.get("issue", {}).get("fields", {}).get("labels", []) or []
                 workflow_instance = self.router.resolve(
                     ticket_type=ticket_type,
                     labels=labels,
@@ -390,6 +412,20 @@ class OrchestratorWorker:
             # Fetch existing state if not already loaded (non-GitHub path)
             if existing_state is None:
                 existing_state = await compiled_workflow.aget_state(config)
+
+            if (
+                isinstance(workflow_instance, DeclarativeWorkflow)
+                and existing_state
+                and existing_state.values
+            ):
+                try:
+                    migrated = workflow_instance.migrate_state(dict(existing_state.values))
+                except Exception as exc:
+                    await self._report_custom_workflow_configuration_error(ticket_key, str(exc))
+                    return
+                if migrated != existing_state.values:
+                    await compiled_workflow.aupdate_state(config, migrated)
+                    existing_state = await compiled_workflow.aget_state(config)
 
             # Debug logging for checkpoint state
             logger.debug(f"Existing state for {ticket_key}: {existing_state}")
@@ -490,7 +526,7 @@ class OrchestratorWorker:
                 error_before_invoke = None
 
                 # New workflow - build initial state
-                state = self._build_initial_state(message)
+                state = self._build_initial_state(message, workflow_instance)
                 logger.info(f"Starting new workflow for {ticket_key}")
 
                 # Record workflow started metric
@@ -2073,6 +2109,50 @@ class OrchestratorWorker:
                 return workflow_instance, state
         return None, None
 
+    async def _resolve_custom_workflow(
+        self, ticket_key: str, labels: list[str]
+    ) -> DeclarativeWorkflow | None:
+        """Resolve a pinned custom identity or the workflow selected by a ticket label."""
+        raw_checkpoint: dict[str, Any] | None = None
+        config = {"configurable": {"thread_id": ticket_key}}
+        with contextlib.suppress(Exception):
+            raw_checkpoint = await self._checkpointer.aget(config)
+        values = raw_checkpoint.get("channel_values", {}) if raw_checkpoint else {}
+
+        workflow_name = values.get("workflow_name")
+        project_key = values.get("workflow_project_key")
+        if workflow_name:
+            project_key = project_key or ticket_key.split("-", 1)[0]
+        else:
+            workflow_name = selected_workflow_name(labels)
+            project_key = ticket_key.split("-", 1)[0] if workflow_name else None
+        if not workflow_name:
+            return None
+
+        jira = JiraClient()
+        try:
+            return await load_project_workflow(jira, str(project_key), str(workflow_name))
+        finally:
+            await jira.close()
+
+    async def _report_custom_workflow_configuration_error(
+        self, ticket_key: str, error: str
+    ) -> None:
+        """Fail closed with an actionable, redacted Jira comment."""
+        jira = JiraClient()
+        try:
+            await jira.add_error_comment(
+                issue_key=ticket_key,
+                error_message=redact_secrets(error)[:1000],
+                node_name="custom workflow configuration",
+            )
+        except Exception:
+            logger.warning(
+                "Could not report custom workflow error for %s", ticket_key, exc_info=True
+            )
+        finally:
+            await jira.close()
+
     def _extract_ticket_type(self, message: QueueMessage) -> TicketType:
         """Extract ticket type from queue message.
 
@@ -2113,7 +2193,7 @@ class OrchestratorWorker:
         Returns:
             Compiled workflow graph.
         """
-        workflow_name = workflow_instance.name
+        workflow_name = getattr(workflow_instance, "cache_key", workflow_instance.name)
 
         # Check cache
         if workflow_name in self._compiled_workflows:
@@ -2129,7 +2209,9 @@ class OrchestratorWorker:
 
         return compiled
 
-    def _build_initial_state(self, message: QueueMessage) -> dict[str, Any]:
+    def _build_initial_state(
+        self, message: QueueMessage, workflow_instance: Any | None = None
+    ) -> dict[str, Any]:
         """Build initial workflow state from queue message.
 
         Args:
@@ -2158,7 +2240,7 @@ class OrchestratorWorker:
 
         yolo_mode = ForgeLabel.YOLO in labels
 
-        return {
+        event_state = {
             "ticket_key": message.ticket_key,
             "ticket_type": ticket_type,
             "event_type": message.event_type,
@@ -2172,6 +2254,10 @@ class OrchestratorWorker:
             "retry_count": message.retry_count,
             "yolo_mode": yolo_mode,
         }
+        if isinstance(workflow_instance, DeclarativeWorkflow):
+            initial = workflow_instance.create_initial_state(message.ticket_key)
+            return {**initial, **event_state}
+        return event_state
 
     async def start(self) -> None:
         """Start the worker and begin processing events."""
@@ -2226,6 +2312,10 @@ async def run_single_ticket(ticket_key: str) -> dict[str, Any]:
     from forge.integrations.jira.client import JiraClient
 
     logger.info(f"Running workflow for {ticket_key}")
+    checkpointer = await get_checkpointer()
+    checkpoint_config = {"configurable": {"thread_id": ticket_key}}
+    raw_checkpoint = await checkpointer.aget(checkpoint_config)
+    checkpoint_values = raw_checkpoint.get("channel_values", {}) if raw_checkpoint else {}
 
     # Fetch ticket to determine type
     jira = JiraClient()
@@ -2238,22 +2328,36 @@ async def run_single_ticket(ticket_key: str) -> dict[str, Any]:
         except ValueError:
             logger.warning(f"Unknown ticket type '{ticket_type_str}', using UNKNOWN")
             ticket_type = TicketType.UNKNOWN
+        workflow_name = checkpoint_values.get("workflow_name") or selected_workflow_name(
+            issue.labels
+        )
+        if workflow_name:
+            workflow_instance: Any = await load_project_workflow(
+                jira,
+                checkpoint_values.get("workflow_project_key")
+                or issue.project_key
+                or ticket_key.split("-", 1)[0],
+                workflow_name,
+            )
+            if not workflow_instance.supports_ticket_type(ticket_type):
+                raise ValueError(
+                    f"workflow '{workflow_name}' is incompatible with ticket type "
+                    f"'{ticket_type.value}'"
+                )
+        else:
+            router = create_default_router()
+            workflow_instance = router.resolve(
+                ticket_type=ticket_type,
+                labels=issue.labels,
+                event={},
+            )
     finally:
         await jira.close()
-
-    # Create router and resolve workflow
-    router = create_default_router()
-    workflow_instance = router.resolve(
-        ticket_type=ticket_type,
-        labels=[],
-        event={},
-    )
 
     if workflow_instance is None:
         raise ValueError(f"No workflow found for ticket type: {ticket_type}")
 
     # Build and compile workflow
-    checkpointer = await get_checkpointer()
     graph = workflow_instance.build_graph()
     compiled_workflow = graph.compile(checkpointer=checkpointer)
 
@@ -2267,9 +2371,18 @@ async def run_single_ticket(ticket_key: str) -> dict[str, Any]:
         "retry_count": 0,
         "yolo_mode": False,
     }
+    if isinstance(workflow_instance, DeclarativeWorkflow):
+        initial_state = {
+            **workflow_instance.create_initial_state(ticket_key),
+            **initial_state,
+        }
+        if checkpoint_values:
+            initial_state = workflow_instance.migrate_state(checkpoint_values)
 
     # Use ticket_key as thread_id for checkpointing
-    config = {"configurable": {"thread_id": ticket_key}}
+    config: dict[str, Any] = checkpoint_config
+    if isinstance(workflow_instance, DeclarativeWorkflow):
+        config["recursion_limit"] = 100
 
     result = await compiled_workflow.ainvoke(initial_state, config=config)
     logger.info(f"Workflow completed: {result.get('current_node')}")
