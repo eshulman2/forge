@@ -28,6 +28,22 @@ def test_builtin_predicates_infer_existing_state() -> None:
     assert not has_capability({"pr_urls": []}, CapabilityName.PULL_REQUEST)
 
 
+def test_repository_capability_is_inferred_from_jira_event_labels() -> None:
+    state = {
+        "context": {
+            "payload": {
+                "issue": {
+                    "fields": {
+                        "labels": ["forge:managed", "repo:forge-sdlc/forge"],
+                    }
+                }
+            }
+        }
+    }
+
+    assert has_capability(state, CapabilityName.REPOSITORIES)
+
+
 @pytest.mark.parametrize(
     ("field", "capability"),
     [
@@ -36,9 +52,7 @@ def test_builtin_predicates_infer_existing_state() -> None:
         ("ci_expected", CapabilityName.CI_EXPECTED),
     ],
 )
-def test_false_boolean_does_not_satisfy_capability(
-    field: str, capability: CapabilityName
-) -> None:
+def test_false_boolean_does_not_satisfy_capability(field: str, capability: CapabilityName) -> None:
     assert not has_capability({field: False}, capability)
 
 

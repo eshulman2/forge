@@ -101,13 +101,33 @@ def _any_true(*keys: str) -> CapabilityPredicate:
     return lambda state: any(state.get(key) is True for key in keys)
 
 
+def _repositories_resolved(state: Mapping[str, Any]) -> bool:
+    if _any_present("current_repo", "repos_to_process", "tasks_by_repo")(state):
+        return True
+    context = state.get("context")
+    if not isinstance(context, Mapping):
+        return False
+    payload = context.get("payload")
+    if not isinstance(payload, Mapping):
+        return False
+    issue = payload.get("issue")
+    if not isinstance(issue, Mapping):
+        return False
+    fields = issue.get("fields")
+    if not isinstance(fields, Mapping):
+        return False
+    labels = fields.get("labels", [])
+    return isinstance(labels, list) and any(
+        isinstance(label, str) and label.startswith("repo:") and "/" in label[5:]
+        for label in labels
+    )
+
+
 BUILTIN_PREDICATES: Mapping[str, CapabilityPredicate] = {
     CapabilityName.PLANNING_CONTEXT.value: _any_present(
         "execution_brief", "work_unit", "task_keys", "plan_content", "spec_content", "prd_content"
     ),
-    CapabilityName.REPOSITORIES.value: _any_present(
-        "current_repo", "repos_to_process", "tasks_by_repo"
-    ),
+    CapabilityName.REPOSITORIES.value: _repositories_resolved,
     CapabilityName.WORKSPACE.value: _any_present("workspace_path"),
     CapabilityName.CODE_CHANGES.value: _any_true("code_changes_present", "changes_made"),
     CapabilityName.COMMIT.value: _any_present("commit_sha", "commit_hash"),
