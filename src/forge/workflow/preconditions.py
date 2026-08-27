@@ -125,7 +125,14 @@ def _repositories_resolved(state: Mapping[str, Any]) -> bool:
 
 BUILTIN_PREDICATES: Mapping[str, CapabilityPredicate] = {
     CapabilityName.PLANNING_CONTEXT.value: _any_present(
-        "execution_brief", "work_unit", "task_keys", "plan_content", "spec_content", "prd_content"
+        "execution_brief",
+        "work_unit",
+        "task_keys",
+        "epic_keys",
+        "plan_content",
+        "spec_content",
+        "rca_content",
+        "prd_content",
     ),
     CapabilityName.REPOSITORIES.value: _repositories_resolved,
     CapabilityName.WORKSPACE.value: _any_present("workspace_path"),

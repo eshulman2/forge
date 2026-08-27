@@ -1,7 +1,7 @@
 """Feature workflow state definition."""
 
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 
 from forge.config import get_settings
 from forge.models.workflow import TicketType
@@ -76,7 +76,7 @@ def create_initial_feature_state(ticket_key: str, **kwargs: Any) -> FeatureState
     settings = get_settings()
 
     # Default values - can be overridden by kwargs
-    defaults = {
+    defaults: dict[str, Any] = {
         "thread_id": ticket_key,
         "ticket_key": ticket_key,
         "ticket_type": TicketType.FEATURE,
@@ -137,6 +137,10 @@ def create_initial_feature_state(ticket_key: str, **kwargs: Any) -> FeatureState
         "revision_requested": False,
         "messages": [],
         "context": {},
+        "artifacts": [],
+        "work_units": [],
+        "current_work_unit_id": None,
+        "work_resolution": {},
         "qa_history": [],
         "generation_context": {},
         "is_question": False,
@@ -163,4 +167,4 @@ def create_initial_feature_state(ticket_key: str, **kwargs: Any) -> FeatureState
     # Merge with kwargs, letting kwargs override defaults
     defaults.update(kwargs)
 
-    return FeatureState(**defaults)
+    return cast(FeatureState, defaults)

@@ -12,6 +12,46 @@ from forge.models.workflow import TicketType
 from forge.workflow.pr_state import PullRequestState
 
 
+class ArtifactRef(TypedDict, total=False):
+    """Checkpoint-safe reference to an artifact used as implementation context.
+
+    ``kind`` identifies the planning level (for example ``task``, ``plan``,
+    ``spec``, or ``prd``). ``source`` identifies where it came from, normally a
+    Jira issue key or a workflow-state field. Content is optional so callers can
+    persist either an inline snapshot or only identity and digest metadata.
+    """
+
+    id: str
+    kind: str
+    source: str
+    content: str
+    repository: str | None
+    approved: bool
+    digest: str
+    jira_key: str | None
+    summary: str | None
+    provenance: dict[str, Any]
+
+
+class WorkUnit(TypedDict, total=False):
+    """Normalized, repository-scoped unit of implementation work.
+
+    Jira Tasks and taskless artifact-based work use the same representation.
+    Workflow-specific legacy task fields remain available during migration.
+    """
+
+    id: str
+    kind: str
+    key: str | None
+    jira_key: str | None
+    repository: str
+    status: str
+    instructions: str
+    source_digest: str
+    source_artifact_ids: list[str]
+    provenance: dict[str, Any]
+
+
 class BaseState(TypedDict, total=False):
     """State shared by ALL workflows."""
 
@@ -56,6 +96,13 @@ class BaseState(TypedDict, total=False):
     capabilities: dict[str, bool]
     precondition_result: dict[str, Any]
     precondition_history: list[dict[str, Any]]
+
+    # Normalized implementation inputs. These fields are optional so checkpoints
+    # written before work resolution was introduced remain valid.
+    artifacts: list[ArtifactRef]
+    work_units: list[WorkUnit]
+    current_work_unit_id: str | None
+    work_resolution: dict[str, Any]
 
 
 class HandoffState(TypedDict):

@@ -88,6 +88,13 @@ Lifecycle capabilities are tri-state. An absent capability preserves compatibili
 checkpoints; an explicit `true` or `false` value is authoritative. This permits safe optional PR and
 CI stages once implementation has durably recorded whether code changes and a PR are expected.
 
+For taskless execution, use the allowlisted `implement_work` node after `setup_workspace`. It
+resolves implementation input in descending specificity: the current Jira Task, a pending Task for
+the current repository, repository-specific Epic plans, a general plan, specification, RCA, PRD,
+then the root ticket. More general artifacts remain supporting context rather than replacing the
+selected work unit. The resolution, artifact digests, and internal work-unit identity are persisted
+in the checkpoint.
+
 Use these commands to inspect or remove definitions:
 
 ```bash

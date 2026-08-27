@@ -12,6 +12,25 @@ from forge.workflow.preconditions import (
 )
 
 NODE_CONTRACTS: dict[str, NodeContract] = {
+    "implement_work": NodeContract(
+        requires=(
+            Requirement(
+                CapabilityName.REPOSITORIES,
+                PreconditionAction.BLOCK,
+                "Repository must be resolved before implementation",
+            ),
+            Requirement(
+                CapabilityName.WORKSPACE,
+                PreconditionAction.BLOCK,
+                "Workspace must exist before implementation",
+            ),
+            Requirement(
+                CapabilityName.PLANNING_CONTEXT,
+                PreconditionAction.BLOCK,
+                "At least one implementation artifact must exist",
+            ),
+        )
+    ),
     "setup_workspace": NodeContract(
         requires=(
             Requirement(

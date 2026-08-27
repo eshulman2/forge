@@ -190,6 +190,33 @@ class TestWorkspaceSetupStatusComment:
         # When current_repo is None, the function picks from tasks_by_repo, so it's "repo1"
         assert "⚙️ Implementation starting for repo1" in call_args[0][1]
 
+    @pytest.mark.asyncio
+    async def test_workspace_setup_uses_repo_labels_without_tasks(self):
+        mock_jira = create_mock_jira_client()
+        mock_manager, _ = create_mock_workspace_manager()
+        mock_git = create_mock_git_operations()
+        state = create_initial_feature_state(
+            ticket_key="TEST-457",
+            context={"payload": {"issue": {"fields": {"labels": ["repo:owner/taskless-repo"]}}}},
+        )
+
+        with (
+            patch("forge.workflow.nodes.workspace_setup.JiraClient", return_value=mock_jira),
+            patch(
+                "forge.workflow.nodes.workspace_setup.get_workspace_manager",
+                return_value=mock_manager,
+            ),
+            patch("forge.workflow.nodes.workspace_setup.GitOperations", return_value=mock_git),
+            patch(
+                "forge.workflow.nodes.workspace_setup.GuardrailsLoader",
+                create_mock_guardrails_loader(),
+            ),
+        ):
+            result = await setup_workspace(state)
+
+        assert result["current_repo"] == "owner/taskless-repo"
+        assert result["repos_to_process"] == ["owner/taskless-repo"]
+
 
 class TestWorkspaceSetupLabelAndTransitions:
     """Test cases for workspace setup setting labels and transitioning tasks."""

@@ -244,11 +244,23 @@ async def setup_workspace(state: WorkflowState) -> WorkflowState:
     ticket_key = state["ticket_key"]
     current_repo = state.get("current_repo")
     tasks_by_repo = state.get("tasks_by_repo", {})
+    repos_to_process = list(state.get("repos_to_process", []))
 
     # Determine which repo to set up
     if not current_repo:
-        # Pick the first repository with tasks
-        repos = list(tasks_by_repo.keys())
+        # Prefer normalized repository state, then task assignments, then the
+        # Jira event labels used by taskless declarative workflows.
+        repos = repos_to_process or list(tasks_by_repo.keys())
+        if not repos:
+            payload = state.get("context", {}).get("payload", {})
+            labels = payload.get("issue", {}).get("fields", {}).get("labels", [])
+            repos = list(
+                dict.fromkeys(
+                    label[5:]
+                    for label in labels
+                    if isinstance(label, str) and label.startswith("repo:") and "/" in label[5:]
+                )
+            )
         if not repos:
             logger.error(f"No repositories found for {ticket_key}")
             return {
@@ -257,6 +269,7 @@ async def setup_workspace(state: WorkflowState) -> WorkflowState:
                 "current_node": "setup_workspace",
             }
         current_repo = repos[0]
+        repos_to_process = repos
 
     # Validate repository name
     if current_repo == "unknown" or "/" not in current_repo:
@@ -420,6 +433,7 @@ async def setup_workspace(state: WorkflowState) -> WorkflowState:
                 **state,
                 "workspace_path": str(workspace.path),
                 "current_repo": current_repo,
+                "repos_to_process": repos_to_process or [current_repo],
                 "fork_owner": fork_owner,
                 "fork_repo": fork_repo_name,
                 "context": context,

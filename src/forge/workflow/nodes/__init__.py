@@ -25,6 +25,7 @@ from forge.workflow.nodes.implement_review import (
     review_response_gate,
     route_review_response,
 )
+from forge.workflow.nodes.implement_work import implement_work
 from forge.workflow.nodes.implementation import implement_task
 from forge.workflow.nodes.local_reviewer import local_review_changes
 from forge.workflow.nodes.plan_bug_fix import (
@@ -106,6 +107,7 @@ __all__ = [
     "teardown_workspace",
     # Implementation
     "implement_task",
+    "implement_work",
     # PR creation
     "create_pull_request",
     "teardown_and_route",
