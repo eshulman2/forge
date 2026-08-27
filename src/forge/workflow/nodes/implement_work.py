@@ -5,6 +5,7 @@ from typing import Any
 
 from forge.config import get_settings
 from forge.integrations.jira.client import JiraClient
+from forge.prompts import load_prompt
 from forge.sandbox.runner import ContainerRunner
 from forge.workflow.implementation_input import (
     NoPendingImplementationWork,
@@ -115,12 +116,7 @@ async def implement_work(state: dict[str, Any]) -> dict[str, Any]:
             policy_key="implement_task",
             commit_message=f"[{ticket_key}] implement {source_kind} work for {current_repo}",
             artifacts=supporting,
-            critical_instructions=(
-                "Read and understand the existing codebase before changing it.",
-                "Implement only the selected work belonging to the current repository.",
-                "Add or update tests for the behavior you change.",
-                "Run the relevant build and test commands before finishing.",
-            ),
+            critical_instructions=load_prompt("implement-work-instructions"),
         )
         prompt = await fetch_and_inject_references(
             state,

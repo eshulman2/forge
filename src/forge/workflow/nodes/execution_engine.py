@@ -9,8 +9,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from forge.prompts import load_prompt
 from forge.sandbox.runner import ContainerRunner
 from forge.workflow.nodes.git_persistence import PushPersistenceError, push_to_fork_with_retry
+from forge.workflow.nodes.repository_scope import implementation_repository_scope
 from forge.workflow.utils import merge_review_exhaustion
 from forge.workspace.git_ops import GitOperations
 from forge.workspace.handoff import capture_handoff
@@ -51,43 +53,39 @@ class ExecutionRequest:
     artifacts: Sequence[ExecutionArtifact] = field(default_factory=tuple)
     review_feedback: str | None = None
     skill_name: str = "implement-task"
-    critical_instructions: Sequence[str] = field(default_factory=tuple)
+    critical_instructions: str = ""
     runner_options: Mapping[str, Any] = field(default_factory=dict)
 
 
 def build_execution_prompt(request: ExecutionRequest) -> str:
     """Render resolved work and supporting artifacts into a stable prompt."""
-    sections = [
-        f"You are implementing changes for [{request.work_id}].",
-        (
-            "## Repository Execution Scope\n"
-            f"Current repository: `{request.repository}`\n"
-            "Implement and validate only the work that belongs to "
-            f"`{request.repository}`. Do not search for, create, or modify files "
-            "assigned to other repositories. Those repositories are handled in "
-            "separate workspaces. Completion for this run is evaluated only "
-            "against the current repository's scope."
-        ),
-    ]
+    review_feedback = ""
     if request.review_feedback:
-        sections.append(
-            "## Previous Qualitative Review Feedback\n"
-            "Please address the following feedback from the qualitative review:\n"
-            f"{request.review_feedback}"
+        review_feedback = load_prompt(
+            "implementation-review-feedback",
+            review_feedback=request.review_feedback,
         )
-    sections.extend(
-        f"## {artifact.title}\n{artifact.content}"
+    artifacts = "\n\n".join(
+        load_prompt(
+            "implementation-artifact",
+            artifact_title=artifact.title,
+            artifact_content=artifact.content,
+        )
         for artifact in request.artifacts
         if artifact.content
     )
-    sections.append(f"## {request.description_title}\n{request.description}")
-    if request.critical_instructions:
-        instructions = "\n".join(
-            f"{index}. {instruction}"
-            for index, instruction in enumerate(request.critical_instructions, start=1)
-        )
-        sections.append(f"## Critical Instructions\n{instructions}")
-    return "\n\n".join(sections) + "\n"
+    return load_prompt(
+        "implementation-execution",
+        work_id=request.work_id,
+        repository_scope=implementation_repository_scope(
+            request.repository, request.workspace_path
+        ),
+        review_feedback=review_feedback,
+        artifacts=artifacts,
+        description_title=request.description_title,
+        description=request.description,
+        critical_instructions=request.critical_instructions,
+    )
 
 
 async def run_and_persist_execution(

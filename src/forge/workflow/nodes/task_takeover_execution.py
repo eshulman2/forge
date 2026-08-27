@@ -6,6 +6,7 @@ from typing import cast
 
 from forge.config import get_settings
 from forge.integrations.jira.client import JiraClient
+from forge.prompts import load_prompt
 from forge.sandbox.runner import ContainerRunner
 from forge.workflow.implementation_input import resolve_implementation_input
 from forge.workflow.nodes.execution_engine import (
@@ -144,14 +145,7 @@ async def execute_task_changes(state: TaskTakeoverState) -> TaskTakeoverState:
             ),
             artifacts=supporting_artifacts,
             review_feedback=state.get("review_feedback"),
-            critical_instructions=(
-                "Read and understand the existing codebase.",
-                "Apply code modifications according to the approved plan.",
-                "You MUST inject at least one new or modified test file inside the workspace to verify the changes.",
-                "Run compilation and local test suite commands inside the container workspace.",
-                "Feed any build/test error and failure logs directly back to your reasoning process to enable iterative self-correction.",
-                "Make sure all compilation and local tests pass successfully before finishing.",
-            ),
+            critical_instructions=load_prompt("task-takeover-execution-instructions"),
         )
         task_prompt = build_execution_prompt(request)
         task_prompt = await fetch_and_inject_references(state, jira, task_prompt)

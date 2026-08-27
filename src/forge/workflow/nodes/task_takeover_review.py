@@ -7,6 +7,7 @@ from typing import cast
 from forge.config import get_settings
 from forge.integrations.jira.client import JiraClient
 from forge.sandbox.runner import ContainerRunner
+from forge.workflow.nodes.repository_scope import review_repository_scope
 from forge.workflow.nodes.review_utils import (
     collect_git_diff,
     next_review_attempt,
@@ -98,12 +99,7 @@ async def run_qualitative_review(state: WorkflowState) -> WorkflowState:
             workspace_path=workspace_path,
         )
         prompt_content = (
-            "## Repository Review Scope\n"
-            f"Current repository: `{current_repo}`\n"
-            "Review only requirements and changes belonging to this repository. Do not "
-            "reject this repository's work because plan steps assigned to other repositories "
-            "are absent; those are implemented and reviewed separately.\n\n"
-            f"{prompt_content}"
+            review_repository_scope(current_repo, workspace_path) + "\n\n" + prompt_content
         )
 
         runner = ContainerRunner(settings)

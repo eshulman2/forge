@@ -161,6 +161,8 @@ class TestLocalReviewBug:
         desc = captured_desc[0]
         # Bug-specific context should be in description
         assert "Password validator" in desc or "Fix regex" in desc or "validators.py" in desc
+        assert "Current repository: `acme/backend`" in desc
+        assert "do not reject this repository's changes" in desc
 
     @pytest.mark.asyncio
     async def test_adequate_verdict_routes_to_create_pr(self, base_bug_review_state):
@@ -374,6 +376,8 @@ class TestLocalReviewFeature:
 
         assert result["current_node"] == "create_pr"
         assert result.get("local_review_verdict") is None
+        assert "Current repository: `acme/backend`" in captured_desc[0]
+        assert "another repository's work is absent" in captured_desc[0]
         mock_git.push_to_fork.assert_called_once()
 
     @pytest.mark.asyncio
