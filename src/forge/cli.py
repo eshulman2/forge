@@ -528,9 +528,9 @@ async def cmd_skills_update(_args: argparse.Namespace) -> int:
 
 async def cmd_project_setup(args: argparse.Namespace) -> int:
     """Configure Jira project properties for Forge."""
+    import io
     import json
     import sys
-    import io
 
     from forge.integrations.jira.client import JiraClient
 
