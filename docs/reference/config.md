@@ -303,6 +303,13 @@ forge project-setup MYPROJ --default-repo org/repo1 --json | jq '.mutations["for
 # Output: "org/repo1"
 ```
 
+### Error Handling in JSON Mode
+
+When running with `--json`, if an error or exception occurs during execution:
+- Standard output (`stdout`) is completely suppressed and remains empty.
+- The error description is written directly to standard error (`stderr`).
+- The command exits with a non-zero exit code (`1`).
+
 Repository labels on managed tickets use `repo:<owner>/<repo>`. Forge validates
 that assignment against the project's configured repositories before workspace
 setup or implementation. A missing or invalid assignment blocks the workflow
