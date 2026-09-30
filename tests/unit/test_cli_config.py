@@ -1180,6 +1180,7 @@ class TestCLIConfigProjectSetupJson:
     async def test_json_mode_prd_proposals_repo_set_and_remove(self, capsys):
         """Test forge.prd_proposals_repo setting and removal in JSON mode."""
         from unittest.mock import AsyncMock, MagicMock, patch
+
         from forge.cli import cmd_project_setup
 
         jira = MagicMock()
@@ -1216,9 +1217,7 @@ class TestCLIConfigProjectSetupJson:
             code = await cmd_project_setup(args)
 
         assert code == 0
-        jira.delete_project_property.assert_awaited_once_with(
-            "AISOS", "forge.prd_proposals_repo"
-        )
+        jira.delete_project_property.assert_awaited_once_with("AISOS", "forge.prd_proposals_repo")
         out, err = capsys.readouterr()
         assert not err
         assert "[OK]" not in out
@@ -1233,6 +1232,7 @@ class TestCLIConfigProjectSetupJson:
     async def test_json_mode_prd_proposals_path_set_and_remove(self, capsys):
         """Test forge.prd_proposals_path setting and removal in JSON mode."""
         from unittest.mock import AsyncMock, MagicMock, patch
+
         from forge.cli import cmd_project_setup
 
         jira = MagicMock()
@@ -1268,9 +1268,7 @@ class TestCLIConfigProjectSetupJson:
             code = await cmd_project_setup(args)
 
         assert code == 0
-        jira.delete_project_property.assert_awaited_once_with(
-            "AISOS", "forge.prd_proposals_path"
-        )
+        jira.delete_project_property.assert_awaited_once_with("AISOS", "forge.prd_proposals_path")
         out, err = capsys.readouterr()
         assert not err
         assert "[OK]" not in out
@@ -1284,6 +1282,7 @@ class TestCLIConfigProjectSetupJson:
     async def test_json_mode_skills_set_and_remove(self, capsys):
         """Test forge.skills setting and removal in JSON mode."""
         from unittest.mock import AsyncMock, MagicMock, patch
+
         from forge.cli import cmd_project_setup
 
         jira = MagicMock()
@@ -1299,9 +1298,7 @@ class TestCLIConfigProjectSetupJson:
 
         assert code == 0
         expected_value = [{"source": "https://github.com/org/skill", "path": "my-skill"}]
-        jira.set_project_property.assert_awaited_once_with(
-            "AISOS", "forge.skills", expected_value
-        )
+        jira.set_project_property.assert_awaited_once_with("AISOS", "forge.skills", expected_value)
         out, err = capsys.readouterr()
         assert not err
         data = json.loads(out)
@@ -1319,9 +1316,7 @@ class TestCLIConfigProjectSetupJson:
             code = await cmd_project_setup(args)
 
         assert code == 0
-        jira.delete_project_property.assert_awaited_once_with(
-            "AISOS", "forge.skills"
-        )
+        jira.delete_project_property.assert_awaited_once_with("AISOS", "forge.skills")
         out, err = capsys.readouterr()
         assert not err
         data = json.loads(out)
@@ -1334,6 +1329,7 @@ class TestCLIConfigProjectSetupJson:
     async def test_json_mode_model_policy_set_and_remove(self, capsys):
         """Test forge.model_policy setting and removal in JSON mode."""
         from unittest.mock import AsyncMock, MagicMock, patch
+
         from forge.cli import cmd_project_setup
 
         jira = MagicMock()
@@ -1342,13 +1338,17 @@ class TestCLIConfigProjectSetupJson:
         jira.close = AsyncMock()
 
         # 1. Test set using model_policy JSON
-        args = self.setup_args(model_policy='{"generate_prd": {"connection": "anthropic", "model": "claude-3-5-sonnet"}}')
+        args = self.setup_args(
+            model_policy='{"generate_prd": {"connection": "anthropic", "model": "claude-3-5-sonnet"}}'
+        )
 
         with patch("forge.integrations.jira.client.JiraClient", return_value=jira):
             code = await cmd_project_setup(args)
 
         assert code == 0
-        expected_policy = {"generate_prd": {"connection": "anthropic", "model": "claude-3-5-sonnet"}}
+        expected_policy = {
+            "generate_prd": {"connection": "anthropic", "model": "claude-3-5-sonnet"}
+        }
         jira.set_project_property.assert_awaited_once_with(
             "AISOS", "forge.model_policy", expected_policy
         )
@@ -1369,9 +1369,7 @@ class TestCLIConfigProjectSetupJson:
             code = await cmd_project_setup(args)
 
         assert code == 0
-        jira.delete_project_property.assert_awaited_once_with(
-            "AISOS", "forge.model_policy"
-        )
+        jira.delete_project_property.assert_awaited_once_with("AISOS", "forge.model_policy")
         out, err = capsys.readouterr()
         assert not err
         data = json.loads(out)
@@ -1384,6 +1382,7 @@ class TestCLIConfigProjectSetupJson:
     async def test_json_mode_model_default_set_and_remove(self, capsys):
         """Test forge.model_default setting and removal in JSON mode."""
         from unittest.mock import AsyncMock, MagicMock, patch
+
         from forge.cli import cmd_project_setup
 
         jira = MagicMock()
@@ -1419,9 +1418,7 @@ class TestCLIConfigProjectSetupJson:
             code = await cmd_project_setup(args)
 
         assert code == 0
-        jira.delete_project_property.assert_awaited_once_with(
-            "AISOS", "forge.model_default"
-        )
+        jira.delete_project_property.assert_awaited_once_with("AISOS", "forge.model_default")
         out, err = capsys.readouterr()
         assert not err
         data = json.loads(out)
@@ -1434,6 +1431,7 @@ class TestCLIConfigProjectSetupJson:
     async def test_json_mode_references_set(self, capsys):
         """Test forge.references setting in JSON mode."""
         from unittest.mock import AsyncMock, MagicMock, patch
+
         from forge.cli import cmd_project_setup
 
         jira = MagicMock()
@@ -1450,10 +1448,10 @@ class TestCLIConfigProjectSetupJson:
             code = await cmd_project_setup(args)
 
         assert code == 0
-        expected_references = [{"url": "https://example.com/doc", "description": "My reference description"}]
-        jira.set_project_references.assert_awaited_once_with(
-            "AISOS", expected_references
-        )
+        expected_references = [
+            {"url": "https://example.com/doc", "description": "My reference description"}
+        ]
+        jira.set_project_references.assert_awaited_once_with("AISOS", expected_references)
         out, err = capsys.readouterr()
         assert not err
         data = json.loads(out)
