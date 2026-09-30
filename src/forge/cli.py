@@ -983,6 +983,7 @@ async def cmd_project_setup(args: argparse.Namespace) -> int:
             return 1
 
         if getattr(args, "json", False):
+            # [AISOS-2526] Implement JSON serialization and output to stdout on successful completion
             print(json.dumps({"project": project_key, "mutations": mutations}, indent=2))
 
         return 0
