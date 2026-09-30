@@ -1254,6 +1254,106 @@ class TestCLIConfigProjectSetupJson:
         assert not out
 
     @pytest.mark.asyncio
+    async def test_json_mode_backward_compatibility(self, capsys):
+        """Verify backward compatibility: standard [OK] status line is output when --json is omitted, and no JSON is output."""
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from forge.cli import cmd_project_setup
+
+        jira = MagicMock()
+        jira.set_project_property = AsyncMock()
+        jira.close = AsyncMock()
+
+        args = SimpleNamespace(
+            project_key="AISOS",
+            repo=None,
+            add_repo=None,
+            remove_repo=None,
+            default_repo="org/repo",
+            remove_default_repo=False,
+            prd_proposals_repo=None,
+            remove_prd_proposals_repo=False,
+            prd_proposals_path=None,
+            remove_prd_proposals_path=False,
+            skills_config=None,
+            add_skill=None,
+            remove_skills=False,
+            model_policy=None,
+            model=None,
+            model_all=None,
+            remove_model=None,
+            clear_model_policy=False,
+            clear_model_default=False,
+            add_reference=None,
+            ref_description=None,
+            remove_reference=None,
+            list_references=False,
+            json=False,
+        )
+
+        with patch("forge.integrations.jira.client.JiraClient", return_value=jira):
+            code = await cmd_project_setup(args)
+
+        assert code == 0
+        jira.set_project_property.assert_awaited_once_with(
+            "AISOS", "forge.default_repo", "org/repo"
+        )
+
+        out, err = capsys.readouterr()
+        assert not err
+        assert "[OK] forge.default_repo = 'org/repo'" in out
+        # Ensure it is not structured JSON
+        with pytest.raises(ValueError):
+            json.loads(out)
+
+    @pytest.mark.asyncio
+    async def test_json_mode_suppressed_failure_reporting(self, capsys):
+        """Verify error suppression under failure scenarios in JSON mode (conflicting arguments)."""
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from forge.cli import cmd_project_setup
+
+        jira = MagicMock()
+        jira.close = AsyncMock()
+
+        args = SimpleNamespace(
+            project_key="AISOS",
+            repo=None,
+            add_repo=None,
+            remove_repo=None,
+            default_repo="org/repo",
+            remove_default_repo=True,
+            prd_proposals_repo=None,
+            remove_prd_proposals_repo=False,
+            prd_proposals_path=None,
+            remove_prd_proposals_path=False,
+            skills_config=None,
+            add_skill=None,
+            remove_skills=False,
+            model_policy=None,
+            model=None,
+            model_all=None,
+            remove_model=None,
+            clear_model_policy=False,
+            clear_model_default=False,
+            add_reference=None,
+            ref_description=None,
+            remove_reference=None,
+            list_references=False,
+            json=True,
+        )
+
+        with patch("forge.integrations.jira.client.JiraClient", return_value=jira):
+            code = await cmd_project_setup(args)
+
+        assert code == 1
+        out, err = capsys.readouterr()
+        assert "Error: --remove-default-repo cannot be combined with --default-repo" in err
+        assert not out
+
+    @pytest.mark.asyncio
     async def test_json_mode_prd_proposals_repo_set_and_remove(self, capsys):
         """Test forge.prd_proposals_repo setting and removal in JSON mode."""
         from types import SimpleNamespace
