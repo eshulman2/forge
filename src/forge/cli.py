@@ -1869,6 +1869,20 @@ Examples:
   # Set skills from a JSON array
   forge project-setup MYPROJ \\
     --skills-config '[{"source":"https://github.com/acme/skills","ref":"v1.0","path":""}]'
+
+  # Output mutation details as structured JSON for automation and parse with jq
+  forge project-setup MYPROJ --default-repo owner/repo1 --json | jq .
+
+Representative output:
+  {
+    "project": "MYPROJ",
+    "mutations": {
+      "forge.default_repo": {
+        "operation": "set",
+        "value": "owner/repo1"
+      }
+    }
+  }
 """,
     )
     setup_parser.add_argument("project_key", help="Jira project key (e.g., MYPROJ)")
