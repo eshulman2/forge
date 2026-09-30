@@ -63,7 +63,9 @@ native credential environment variables.
 
     `api_key_env` contains an environment-variable name, never the credential.
     Different connections can reference different keys. Omit `api_key_env` for
-    endpoints that do not authenticate. Compatible endpoints must implement the
+    endpoints that do not authenticate; named connections never fall back to
+    `OPENAI_API_KEY` unless they explicitly name it in `api_key_env`.
+    Compatible endpoints must implement the
     OpenAI Chat Completions API and tool calling for agentic stages.
 
 Forge validates the backend, credentials, model allowlist, capabilities, and
