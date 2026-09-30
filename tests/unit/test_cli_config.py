@@ -927,10 +927,40 @@ class TestCLIReferencesConfig:
 class TestCLIConfigProjectSetupJson:
     """Tests for the project-setup CLI command in JSON mode."""
 
+    @staticmethod
+    def setup_args(**overrides):
+        values = {
+            "project_key": "AISOS",
+            "repo": None,
+            "add_repo": None,
+            "remove_repo": None,
+            "default_repo": None,
+            "remove_default_repo": False,
+            "prd_proposals_repo": None,
+            "remove_prd_proposals_repo": False,
+            "prd_proposals_path": None,
+            "remove_prd_proposals_path": False,
+            "skills_config": None,
+            "add_skill": None,
+            "remove_skills": False,
+            "model_policy": None,
+            "model": None,
+            "model_all": None,
+            "remove_model": None,
+            "clear_model_policy": False,
+            "clear_model_default": False,
+            "add_reference": None,
+            "ref_description": None,
+            "remove_reference": None,
+            "list_references": False,
+            "json": True,
+        }
+        values.update(overrides)
+        return SimpleNamespace(**values)
+
     @pytest.mark.asyncio
     async def test_sc001_single_set_mutation_json(self, capsys):
         """SC-001: Run project-setup with a single property mutation (Set) in JSON mode."""
-        from types import SimpleNamespace
         from unittest.mock import AsyncMock, MagicMock, patch
 
         from forge.cli import cmd_project_setup
@@ -939,32 +969,7 @@ class TestCLIConfigProjectSetupJson:
         jira.set_project_property = AsyncMock()
         jira.close = AsyncMock()
 
-        args = SimpleNamespace(
-            project_key="AISOS",
-            repo=None,
-            add_repo=None,
-            remove_repo=None,
-            default_repo="org/repo",
-            remove_default_repo=False,
-            prd_proposals_repo=None,
-            remove_prd_proposals_repo=False,
-            prd_proposals_path=None,
-            remove_prd_proposals_path=False,
-            skills_config=None,
-            add_skill=None,
-            remove_skills=False,
-            model_policy=None,
-            model=None,
-            model_all=None,
-            remove_model=None,
-            clear_model_policy=False,
-            clear_model_default=False,
-            add_reference=None,
-            ref_description=None,
-            remove_reference=None,
-            list_references=False,
-            json=True,
-        )
+        args = self.setup_args(default_repo="org/repo")
 
         with patch("forge.integrations.jira.client.JiraClient", return_value=jira):
             code = await cmd_project_setup(args)
@@ -989,7 +994,6 @@ class TestCLIConfigProjectSetupJson:
     @pytest.mark.asyncio
     async def test_sc002_single_remove_mutation_json(self, capsys):
         """SC-002: Run project-setup with a single property mutation (Remove) in JSON mode."""
-        from types import SimpleNamespace
         from unittest.mock import AsyncMock, MagicMock, patch
 
         from forge.cli import cmd_project_setup
@@ -998,32 +1002,7 @@ class TestCLIConfigProjectSetupJson:
         jira.delete_project_property = AsyncMock()
         jira.close = AsyncMock()
 
-        args = SimpleNamespace(
-            project_key="AISOS",
-            repo=None,
-            add_repo=None,
-            remove_repo=None,
-            default_repo=None,
-            remove_default_repo=True,
-            prd_proposals_repo=None,
-            remove_prd_proposals_repo=False,
-            prd_proposals_path=None,
-            remove_prd_proposals_path=False,
-            skills_config=None,
-            add_skill=None,
-            remove_skills=False,
-            model_policy=None,
-            model=None,
-            model_all=None,
-            remove_model=None,
-            clear_model_policy=False,
-            clear_model_default=False,
-            add_reference=None,
-            ref_description=None,
-            remove_reference=None,
-            list_references=False,
-            json=True,
-        )
+        args = self.setup_args(remove_default_repo=True)
 
         with patch("forge.integrations.jira.client.JiraClient", return_value=jira):
             code = await cmd_project_setup(args)
@@ -1046,7 +1025,6 @@ class TestCLIConfigProjectSetupJson:
     @pytest.mark.asyncio
     async def test_sc003_multiple_mixed_mutations_json(self, capsys):
         """SC-003: Run project-setup with multiple mutations (Mixed Set and Remove) in JSON mode."""
-        from types import SimpleNamespace
         from unittest.mock import AsyncMock, MagicMock, patch
 
         from forge.cli import cmd_project_setup
@@ -1056,32 +1034,7 @@ class TestCLIConfigProjectSetupJson:
         jira.delete_project_property = AsyncMock()
         jira.close = AsyncMock()
 
-        args = SimpleNamespace(
-            project_key="AISOS",
-            repo=None,
-            add_repo=None,
-            remove_repo=None,
-            default_repo="org/repo",
-            remove_default_repo=False,
-            prd_proposals_repo=None,
-            remove_prd_proposals_repo=True,
-            prd_proposals_path=None,
-            remove_prd_proposals_path=False,
-            skills_config=None,
-            add_skill=None,
-            remove_skills=False,
-            model_policy=None,
-            model=None,
-            model_all=None,
-            remove_model=None,
-            clear_model_policy=False,
-            clear_model_default=False,
-            add_reference=None,
-            ref_description=None,
-            remove_reference=None,
-            list_references=False,
-            json=True,
-        )
+        args = self.setup_args(default_repo="org/repo", remove_prd_proposals_repo=True)
 
         with patch("forge.integrations.jira.client.JiraClient", return_value=jira):
             code = await cmd_project_setup(args)
@@ -1111,7 +1064,6 @@ class TestCLIConfigProjectSetupJson:
     @pytest.mark.asyncio
     async def test_sc004_backward_compatibility(self, capsys):
         """SC-004: Backward compatibility of text mode when --json is omitted."""
-        from types import SimpleNamespace
         from unittest.mock import AsyncMock, MagicMock, patch
 
         from forge.cli import cmd_project_setup
@@ -1120,32 +1072,7 @@ class TestCLIConfigProjectSetupJson:
         jira.set_project_property = AsyncMock()
         jira.close = AsyncMock()
 
-        args = SimpleNamespace(
-            project_key="AISOS",
-            repo=None,
-            add_repo=None,
-            remove_repo=None,
-            default_repo="org/repo",
-            remove_default_repo=False,
-            prd_proposals_repo=None,
-            remove_prd_proposals_repo=False,
-            prd_proposals_path=None,
-            remove_prd_proposals_path=False,
-            skills_config=None,
-            add_skill=None,
-            remove_skills=False,
-            model_policy=None,
-            model=None,
-            model_all=None,
-            remove_model=None,
-            clear_model_policy=False,
-            clear_model_default=False,
-            add_reference=None,
-            ref_description=None,
-            remove_reference=None,
-            list_references=False,
-            json=False,
-        )
+        args = self.setup_args(default_repo="org/repo", json=False)
 
         with patch("forge.integrations.jira.client.JiraClient", return_value=jira):
             code = await cmd_project_setup(args)
@@ -1165,7 +1092,6 @@ class TestCLIConfigProjectSetupJson:
     @pytest.mark.asyncio
     async def test_sc005_failure_reporting_json_suppresses_stdout(self, capsys):
         """SC-005: Failure reporting in JSON mode."""
-        from types import SimpleNamespace
         from unittest.mock import AsyncMock, MagicMock, patch
 
         from forge.cli import cmd_project_setup
@@ -1173,32 +1099,7 @@ class TestCLIConfigProjectSetupJson:
         jira = MagicMock()
         jira.close = AsyncMock()
 
-        args = SimpleNamespace(
-            project_key="AISOS",
-            repo=None,
-            add_repo=None,
-            remove_repo=None,
-            default_repo="org/repo",
-            remove_default_repo=True,
-            prd_proposals_repo=None,
-            remove_prd_proposals_repo=False,
-            prd_proposals_path=None,
-            remove_prd_proposals_path=False,
-            skills_config=None,
-            add_skill=None,
-            remove_skills=False,
-            model_policy=None,
-            model=None,
-            model_all=None,
-            remove_model=None,
-            clear_model_policy=False,
-            clear_model_default=False,
-            add_reference=None,
-            ref_description=None,
-            remove_reference=None,
-            list_references=False,
-            json=True,
-        )
+        args = self.setup_args(default_repo="org/repo", remove_default_repo=True)
 
         with patch("forge.integrations.jira.client.JiraClient", return_value=jira):
             code = await cmd_project_setup(args)
@@ -1211,35 +1112,9 @@ class TestCLIConfigProjectSetupJson:
     @pytest.mark.asyncio
     async def test_sc005_failure_reporting_json_exception(self, capsys):
         """Verify that general exceptions raised during JSON mode suppress stdout and route cleanly to stderr."""
-        from types import SimpleNamespace
         from unittest.mock import AsyncMock, patch
 
-        args = SimpleNamespace(
-            project_key="AISOS",
-            repo=None,
-            add_repo=None,
-            remove_repo=None,
-            default_repo="org/repo",
-            remove_default_repo=False,
-            prd_proposals_repo=None,
-            remove_prd_proposals_repo=False,
-            prd_proposals_path=None,
-            remove_prd_proposals_path=False,
-            skills_config=None,
-            add_skill=None,
-            remove_skills=False,
-            model_policy=None,
-            model=None,
-            model_all=None,
-            remove_model=None,
-            clear_model_policy=False,
-            clear_model_default=False,
-            add_reference=None,
-            ref_description=None,
-            remove_reference=None,
-            list_references=False,
-            json=True,
-        )
+        args = self.setup_args(default_repo="org/repo")
 
         with patch("forge.integrations.jira.client.JiraClient") as mock_client:
             client_inst = mock_client.return_value
@@ -1256,7 +1131,6 @@ class TestCLIConfigProjectSetupJson:
     @pytest.mark.asyncio
     async def test_json_mode_backward_compatibility(self, capsys):
         """Verify backward compatibility: standard [OK] status line is output when --json is omitted, and no JSON is output."""
-        from types import SimpleNamespace
         from unittest.mock import AsyncMock, MagicMock, patch
 
         from forge.cli import cmd_project_setup
@@ -1265,32 +1139,7 @@ class TestCLIConfigProjectSetupJson:
         jira.set_project_property = AsyncMock()
         jira.close = AsyncMock()
 
-        args = SimpleNamespace(
-            project_key="AISOS",
-            repo=None,
-            add_repo=None,
-            remove_repo=None,
-            default_repo="org/repo",
-            remove_default_repo=False,
-            prd_proposals_repo=None,
-            remove_prd_proposals_repo=False,
-            prd_proposals_path=None,
-            remove_prd_proposals_path=False,
-            skills_config=None,
-            add_skill=None,
-            remove_skills=False,
-            model_policy=None,
-            model=None,
-            model_all=None,
-            remove_model=None,
-            clear_model_policy=False,
-            clear_model_default=False,
-            add_reference=None,
-            ref_description=None,
-            remove_reference=None,
-            list_references=False,
-            json=False,
-        )
+        args = self.setup_args(default_repo="org/repo", json=False)
 
         with patch("forge.integrations.jira.client.JiraClient", return_value=jira):
             code = await cmd_project_setup(args)
@@ -1310,7 +1159,6 @@ class TestCLIConfigProjectSetupJson:
     @pytest.mark.asyncio
     async def test_json_mode_suppressed_failure_reporting(self, capsys):
         """Verify error suppression under failure scenarios in JSON mode (conflicting arguments)."""
-        from types import SimpleNamespace
         from unittest.mock import AsyncMock, MagicMock, patch
 
         from forge.cli import cmd_project_setup
@@ -1318,32 +1166,7 @@ class TestCLIConfigProjectSetupJson:
         jira = MagicMock()
         jira.close = AsyncMock()
 
-        args = SimpleNamespace(
-            project_key="AISOS",
-            repo=None,
-            add_repo=None,
-            remove_repo=None,
-            default_repo="org/repo",
-            remove_default_repo=True,
-            prd_proposals_repo=None,
-            remove_prd_proposals_repo=False,
-            prd_proposals_path=None,
-            remove_prd_proposals_path=False,
-            skills_config=None,
-            add_skill=None,
-            remove_skills=False,
-            model_policy=None,
-            model=None,
-            model_all=None,
-            remove_model=None,
-            clear_model_policy=False,
-            clear_model_default=False,
-            add_reference=None,
-            ref_description=None,
-            remove_reference=None,
-            list_references=False,
-            json=True,
-        )
+        args = self.setup_args(default_repo="org/repo", remove_default_repo=True)
 
         with patch("forge.integrations.jira.client.JiraClient", return_value=jira):
             code = await cmd_project_setup(args)
@@ -1356,7 +1179,6 @@ class TestCLIConfigProjectSetupJson:
     @pytest.mark.asyncio
     async def test_json_mode_prd_proposals_repo_set_and_remove(self, capsys):
         """Test forge.prd_proposals_repo setting and removal in JSON mode."""
-        from types import SimpleNamespace
         from unittest.mock import AsyncMock, MagicMock, patch
         from forge.cli import cmd_project_setup
 
@@ -1366,32 +1188,7 @@ class TestCLIConfigProjectSetupJson:
         jira.close = AsyncMock()
 
         # 1. Test set
-        args = SimpleNamespace(
-            project_key="AISOS",
-            repo=None,
-            add_repo=None,
-            remove_repo=None,
-            default_repo=None,
-            remove_default_repo=False,
-            prd_proposals_repo="owner/repo",
-            remove_prd_proposals_repo=False,
-            prd_proposals_path=None,
-            remove_prd_proposals_path=False,
-            skills_config=None,
-            add_skill=None,
-            remove_skills=False,
-            model_policy=None,
-            model=None,
-            model_all=None,
-            remove_model=None,
-            clear_model_policy=False,
-            clear_model_default=False,
-            add_reference=None,
-            ref_description=None,
-            remove_reference=None,
-            list_references=False,
-            json=True,
-        )
+        args = self.setup_args(prd_proposals_repo="owner/repo")
 
         with patch("forge.integrations.jira.client.JiraClient", return_value=jira):
             code = await cmd_project_setup(args)
@@ -1435,7 +1232,6 @@ class TestCLIConfigProjectSetupJson:
     @pytest.mark.asyncio
     async def test_json_mode_prd_proposals_path_set_and_remove(self, capsys):
         """Test forge.prd_proposals_path setting and removal in JSON mode."""
-        from types import SimpleNamespace
         from unittest.mock import AsyncMock, MagicMock, patch
         from forge.cli import cmd_project_setup
 
@@ -1445,32 +1241,7 @@ class TestCLIConfigProjectSetupJson:
         jira.close = AsyncMock()
 
         # 1. Test set
-        args = SimpleNamespace(
-            project_key="AISOS",
-            repo=None,
-            add_repo=None,
-            remove_repo=None,
-            default_repo=None,
-            remove_default_repo=False,
-            prd_proposals_repo=None,
-            remove_prd_proposals_repo=False,
-            prd_proposals_path="enhancements/",
-            remove_prd_proposals_path=False,
-            skills_config=None,
-            add_skill=None,
-            remove_skills=False,
-            model_policy=None,
-            model=None,
-            model_all=None,
-            remove_model=None,
-            clear_model_policy=False,
-            clear_model_default=False,
-            add_reference=None,
-            ref_description=None,
-            remove_reference=None,
-            list_references=False,
-            json=True,
-        )
+        args = self.setup_args(prd_proposals_path="enhancements/")
 
         with patch("forge.integrations.jira.client.JiraClient", return_value=jira):
             code = await cmd_project_setup(args)
@@ -1512,7 +1283,6 @@ class TestCLIConfigProjectSetupJson:
     @pytest.mark.asyncio
     async def test_json_mode_skills_set_and_remove(self, capsys):
         """Test forge.skills setting and removal in JSON mode."""
-        from types import SimpleNamespace
         from unittest.mock import AsyncMock, MagicMock, patch
         from forge.cli import cmd_project_setup
 
@@ -1522,32 +1292,7 @@ class TestCLIConfigProjectSetupJson:
         jira.close = AsyncMock()
 
         # 1. Test set using add_skill
-        args = SimpleNamespace(
-            project_key="AISOS",
-            repo=None,
-            add_repo=None,
-            remove_repo=None,
-            default_repo=None,
-            remove_default_repo=False,
-            prd_proposals_repo=None,
-            remove_prd_proposals_repo=False,
-            prd_proposals_path=None,
-            remove_prd_proposals_path=False,
-            skills_config=None,
-            add_skill=["source=https://github.com/org/skill,path=my-skill"],
-            remove_skills=False,
-            model_policy=None,
-            model=None,
-            model_all=None,
-            remove_model=None,
-            clear_model_policy=False,
-            clear_model_default=False,
-            add_reference=None,
-            ref_description=None,
-            remove_reference=None,
-            list_references=False,
-            json=True,
-        )
+        args = self.setup_args(add_skill=["source=https://github.com/org/skill,path=my-skill"])
 
         with patch("forge.integrations.jira.client.JiraClient", return_value=jira):
             code = await cmd_project_setup(args)
@@ -1588,7 +1333,6 @@ class TestCLIConfigProjectSetupJson:
     @pytest.mark.asyncio
     async def test_json_mode_model_policy_set_and_remove(self, capsys):
         """Test forge.model_policy setting and removal in JSON mode."""
-        from types import SimpleNamespace
         from unittest.mock import AsyncMock, MagicMock, patch
         from forge.cli import cmd_project_setup
 
@@ -1598,32 +1342,7 @@ class TestCLIConfigProjectSetupJson:
         jira.close = AsyncMock()
 
         # 1. Test set using model_policy JSON
-        args = SimpleNamespace(
-            project_key="AISOS",
-            repo=None,
-            add_repo=None,
-            remove_repo=None,
-            default_repo=None,
-            remove_default_repo=False,
-            prd_proposals_repo=None,
-            remove_prd_proposals_repo=False,
-            prd_proposals_path=None,
-            remove_prd_proposals_path=False,
-            skills_config=None,
-            add_skill=None,
-            remove_skills=False,
-            model_policy='{"generate_prd": {"connection": "anthropic", "model": "claude-3-5-sonnet"}}',
-            model=None,
-            model_all=None,
-            remove_model=None,
-            clear_model_policy=False,
-            clear_model_default=False,
-            add_reference=None,
-            ref_description=None,
-            remove_reference=None,
-            list_references=False,
-            json=True,
-        )
+        args = self.setup_args(model_policy='{"generate_prd": {"connection": "anthropic", "model": "claude-3-5-sonnet"}}')
 
         with patch("forge.integrations.jira.client.JiraClient", return_value=jira):
             code = await cmd_project_setup(args)
@@ -1664,7 +1383,6 @@ class TestCLIConfigProjectSetupJson:
     @pytest.mark.asyncio
     async def test_json_mode_model_default_set_and_remove(self, capsys):
         """Test forge.model_default setting and removal in JSON mode."""
-        from types import SimpleNamespace
         from unittest.mock import AsyncMock, MagicMock, patch
         from forge.cli import cmd_project_setup
 
@@ -1674,32 +1392,7 @@ class TestCLIConfigProjectSetupJson:
         jira.close = AsyncMock()
 
         # 1. Test set using model_all
-        args = SimpleNamespace(
-            project_key="AISOS",
-            repo=None,
-            add_repo=None,
-            remove_repo=None,
-            default_repo=None,
-            remove_default_repo=False,
-            prd_proposals_repo=None,
-            remove_prd_proposals_repo=False,
-            prd_proposals_path=None,
-            remove_prd_proposals_path=False,
-            skills_config=None,
-            add_skill=None,
-            remove_skills=False,
-            model_policy=None,
-            model=None,
-            model_all="vertex-prod:gemini-pro",
-            remove_model=None,
-            clear_model_policy=False,
-            clear_model_default=False,
-            add_reference=None,
-            ref_description=None,
-            remove_reference=None,
-            list_references=False,
-            json=True,
-        )
+        args = self.setup_args(model_all="vertex-prod:gemini-pro")
 
         with patch("forge.integrations.jira.client.JiraClient", return_value=jira):
             code = await cmd_project_setup(args)
@@ -1740,7 +1433,6 @@ class TestCLIConfigProjectSetupJson:
     @pytest.mark.asyncio
     async def test_json_mode_references_set(self, capsys):
         """Test forge.references setting in JSON mode."""
-        from types import SimpleNamespace
         from unittest.mock import AsyncMock, MagicMock, patch
         from forge.cli import cmd_project_setup
 
@@ -1749,31 +1441,9 @@ class TestCLIConfigProjectSetupJson:
         jira.set_project_references = AsyncMock()
         jira.close = AsyncMock()
 
-        args = SimpleNamespace(
-            project_key="AISOS",
-            repo=None,
-            add_repo=None,
-            remove_repo=None,
-            default_repo=None,
-            remove_default_repo=False,
-            prd_proposals_repo=None,
-            remove_prd_proposals_repo=False,
-            prd_proposals_path=None,
-            remove_prd_proposals_path=False,
-            skills_config=None,
-            add_skill=None,
-            remove_skills=False,
-            model_policy=None,
-            model=None,
-            model_all=None,
-            remove_model=None,
-            clear_model_policy=False,
-            clear_model_default=False,
+        args = self.setup_args(
             add_reference=["https://example.com/doc"],
             ref_description=["My reference description"],
-            remove_reference=None,
-            list_references=False,
-            json=True,
         )
 
         with patch("forge.integrations.jira.client.JiraClient", return_value=jira):
