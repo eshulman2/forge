@@ -12,6 +12,88 @@ from forge.models.workflow import TicketType
 from forge.workflow.pr_state import PullRequestState
 
 
+class ArtifactRef(TypedDict, total=False):
+    """Checkpoint-safe reference to an artifact used as implementation context.
+
+    ``kind`` identifies the planning level (for example ``task``, ``plan``,
+    ``spec``, or ``prd``). ``source`` identifies where it came from, normally a
+    Jira issue key or a workflow-state field. Content is optional so callers can
+    persist either an inline snapshot or only identity and digest metadata.
+    """
+
+    id: str
+    kind: str
+    source: str
+    content: str
+    repository: str | None
+    approved: bool
+    digest: str
+    jira_key: str | None
+    summary: str | None
+    provenance: dict[str, Any]
+    revision: int
+    status: str
+    approved_digest: str | None
+    input_artifact_ids: list[str]
+    parent_artifact_id: str | None
+    child_artifact_ids: list[str]
+    derived_work_unit_ids: list[str]
+    created_by_node: str
+
+
+class WorkUnit(TypedDict, total=False):
+    """Normalized, repository-scoped unit of implementation work.
+
+    Jira Tasks and taskless artifact-based work use the same representation.
+    Workflow-specific legacy task fields remain available during migration.
+    """
+
+    id: str
+    kind: str
+    key: str | None
+    jira_key: str | None
+    repository: str
+    status: str
+    instructions: str
+    source_digest: str
+    source_artifact_ids: list[str]
+    context_artifact_ids: list[str]
+    dependency_work_unit_ids: list[str]
+    provenance: dict[str, Any]
+
+
+class RepositoryRef(TypedDict, total=False):
+    """Repository scope and traversal status for a workflow."""
+
+    name: str
+    source: str
+    status: str
+    work_unit_ids: list[str]
+    provenance: dict[str, Any]
+
+
+class ValidationResult(TypedDict, total=False):
+    """Durable validation evidence for one repository/work unit."""
+
+    id: str
+    repository: str
+    work_unit_id: str | None
+    kind: str
+    status: str
+    summary: str
+    evidence: dict[str, Any]
+
+
+class PublicationRef(TypedDict, total=False):
+    """Durable commit/push/pull-request outcome for a repository."""
+
+    repository: str
+    commit_sha: str | None
+    branch: str | None
+    pr_url: str | None
+    status: str
+
+
 class BaseState(TypedDict, total=False):
     """State shared by ALL workflows."""
 
@@ -37,10 +119,55 @@ class BaseState(TypedDict, total=False):
     feedback_comment: str | None
     revision_requested: bool
     yolo_mode: bool  # When True, approval gates auto-pass without human input
+    direct_mode: bool  # When True, directly provision tickets instead of drafting
 
     # Message history
     messages: Annotated[list[Any], add_messages]
     context: dict[str, Any]
+    # Durable ingress audit trail. Entries are provider-neutral command decisions,
+    # bounded by the worker to keep checkpoint growth predictable.
+    command_decisions: list[dict[str, Any]]
+    # Normalized observation decisions are retained for read-model rebuilds;
+    # unlike provider payloads they contain only contract metadata and reason.
+    observation_history: list[dict[str, Any]]
+
+    # Declarative workflow identity. Built-in workflows leave these unset.
+    workflow_name: str
+    workflow_revision: int
+    workflow_digest: str
+    # Canonical names for the immutable process artifact.  The shorter
+    # workflow_* fields above remain for checkpoint compatibility.
+    workflow_definition_revision: int
+    workflow_definition_digest: str
+    workflow_definition: dict[str, Any]
+    workflow_pin_status: str
+    workflow_state_profile: str
+    workflow_project_key: str
+    workflow_transition_count: int
+    workflow_node_attempts: dict[str, int]
+    transition_history: list[dict[str, Any]]
+    station_history: list[dict[str, Any]]
+    migration_history: list[dict[str, Any]]
+    operator_actions: list[dict[str, Any]]
+
+    # Generic node-contract capabilities and durable precondition audit trail.
+    # Missing capability keys preserve legacy inference; explicit booleans are
+    # authoritative for newer workflows.
+    capabilities: dict[str, bool]
+    precondition_result: dict[str, Any]
+    precondition_history: list[dict[str, Any]]
+
+    # Normalized implementation inputs. These fields are optional so checkpoints
+    # written before work resolution was introduced remain valid.
+    artifacts: list[ArtifactRef]
+    work_units: list[WorkUnit]
+    current_work_unit_id: str | None
+    work_resolution: dict[str, Any]
+    repositories: list[RepositoryRef]
+    current_repository: str | None
+    validations: list[ValidationResult]
+    publications: list[PublicationRef]
+    node_outcome: str | None
 
 
 class HandoffState(TypedDict):

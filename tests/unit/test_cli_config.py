@@ -79,6 +79,7 @@ class TestCLIConfigParserAndRouting:
                 "org/new",
                 "--remove-repo",
                 "org/old",
+                "--remove-default-repo",
                 "--remove-prd-proposals-repo",
                 "--remove-prd-proposals-path",
                 "--remove-skills",
@@ -89,6 +90,7 @@ class TestCLIConfigParserAndRouting:
         args = mock_cmd.call_args.args[0]
         assert args.add_repo == ["org/new"]
         assert args.remove_repo == ["org/old"]
+        assert args.remove_default_repo is True
         assert args.remove_prd_proposals_repo is True
         assert args.remove_prd_proposals_path is True
         assert args.remove_skills is True
@@ -105,6 +107,7 @@ class TestCLIConfigExecution:
             "add_repo": None,
             "remove_repo": None,
             "default_repo": None,
+            "remove_default_repo": False,
             "prd_proposals_repo": None,
             "remove_prd_proposals_repo": False,
             "prd_proposals_path": None,
@@ -165,6 +168,7 @@ class TestCLIConfigExecution:
         jira.delete_project_property = AsyncMock()
         jira.close = AsyncMock()
         args = self.setup_args(
+            remove_default_repo=True,
             remove_prd_proposals_repo=True,
             remove_prd_proposals_path=True,
             remove_skills=True,
@@ -175,10 +179,26 @@ class TestCLIConfigExecution:
 
         assert code == 0
         assert [item.args for item in jira.delete_project_property.await_args_list] == [
+            ("PROJ", "forge.default_repo"),
             ("PROJ", "forge.prd_proposals_repo"),
             ("PROJ", "forge.prd_proposals_path"),
             ("PROJ", "forge.skills"),
         ]
+
+    @pytest.mark.asyncio
+    async def test_remove_default_repo_rejects_setting_a_default(self, capsys):
+        jira = MagicMock()
+        jira.delete_project_property = AsyncMock()
+        jira.close = AsyncMock()
+
+        with patch("forge.integrations.jira.client.JiraClient", return_value=jira):
+            code = await cmd_project_setup(
+                self.setup_args(default_repo="org/repo", remove_default_repo=True)
+            )
+
+        assert code == 1
+        assert "cannot be combined" in capsys.readouterr().err
+        jira.delete_project_property.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_model_flag_preserves_existing_project_overrides(self):
@@ -197,7 +217,7 @@ class TestCLIConfigExecution:
             skills_config=None,
             add_skill=None,
             model_policy=None,
-            model=["implement_task=vertex:gemini-pro"],
+            model=["implement_work=vertex:gemini-pro"],
             model_all=None,
         )
 
@@ -206,7 +226,7 @@ class TestCLIConfigExecution:
 
         assert code == 0
         written = jira.set_project_property.await_args.args[2]
-        assert set(written) == {"generate_prd", "implement_task"}
+        assert set(written) == {"generate_prd", "implement_work"}
 
     @pytest.mark.asyncio
     async def test_project_model_override_does_not_require_local_connections(self):
@@ -441,7 +461,7 @@ class TestCLIConfigExecution:
 
     @pytest.mark.asyncio
     async def test_require_project_config_true(self, mock_jira_client, mock_settings, capsys):
-        """Under FORGE_REQUIRE_PROJECT_CONFIG=True, missing props are reported as unset/required."""
+        """Only forge.repos is required when project configuration is enabled."""
         mock_settings.forge_require_project_config = True
         # Set project property for forge.repos to None
         mock_jira_client.get_project_property = AsyncMock(
@@ -466,8 +486,8 @@ class TestCLIConfigExecution:
         out, err = capsys.readouterr()
         # Should NOT inherit fallback settings, except for proposals_path
         assert "forge.repos:" in out and "[required / missing]" in out
-        assert "forge.default_repo:" in out and "[required / missing]" in out
-        assert "forge.prd_proposals_repo:" in out and "[required / missing]" in out
+        assert "forge.default_repo:" in out and "(none) [unset]" in out
+        assert "forge.prd_proposals_repo:" in out and "(none) [unset]" in out
         assert (
             "forge.prd_proposals_path:" in out
             and "global-enhancements" in out

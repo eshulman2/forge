@@ -1,10 +1,12 @@
 """Git operations for workspace management."""
 
 import logging
+import os
 import subprocess
 from pathlib import Path
 
 from forge.config import get_settings
+from forge.integrations.source_control.contracts import GitCredentials
 from forge.utils.redaction import redact_secrets
 from forge.workspace.manager import Workspace
 
@@ -14,13 +16,20 @@ logger = logging.getLogger(__name__)
 class GitOperations:
     """Git operations for cloning, branching, committing, and pushing."""
 
-    def __init__(self, workspace: Workspace):
+    def __init__(self, workspace: Workspace, credentials: GitCredentials):
         """Initialize git operations for a workspace.
 
         Args:
             workspace: Workspace to operate on.
+            credentials: Host/token/CA for this workspace's connection. Every
+                clone/remote URL this class builds is derived from these,
+                never from process-wide settings, so operations against a
+                non-default connection (e.g. GitHub Enterprise, or a second
+                org with its own token) hit the right host with the right
+                credential.
         """
         self.workspace = workspace
+        self.credentials = credentials
         self.settings = get_settings()
         # Set by workspace recovery when this instance represents a replacement
         # clone rather than the workspace recorded in workflow state.  The path
@@ -33,12 +42,31 @@ class GitOperations:
         """Get the repository path."""
         return self.workspace.path
 
+    def _remote_url(self, owner: str, repo: str) -> str:
+        """Build an authenticated HTTPS clone/remote URL for owner/repo on
+        this workspace's connection host."""
+        return (
+            f"https://{self.credentials.url_user}:{self.credentials.token}"
+            f"@{self.credentials.host}/{owner}/{repo}.git"
+        )
+
+    def _git_env(self) -> dict[str, str] | None:
+        """Subprocess environment for git commands, trusting this connection's
+        CA bundle when it has one (self-signed GitHub Enterprise Server certs).
+
+        Returns None (inherit the process environment unmodified) when no
+        ca_path is configured -- the common case.
+        """
+        if not self.credentials.ca_path:
+            return None
+        return {**os.environ, "GIT_SSL_CAINFO": self.credentials.ca_path}
+
     def _run_git(
         self,
         *args: str,
         capture_output: bool = True,
         check: bool = True,
-    ) -> subprocess.CompletedProcess:
+    ) -> subprocess.CompletedProcess[str]:
         """Run a git command in the workspace.
 
         Args:
@@ -59,6 +87,7 @@ class GitOperations:
             capture_output=capture_output,
             text=True,
             check=False,
+            env=self._git_env(),
         )
 
         if check and result.returncode != 0:
@@ -75,12 +104,13 @@ class GitOperations:
         """Clone the repository into the workspace.
 
         Args:
-            repo_url: Repository URL. Constructs from settings if None.
+            repo_url: Repository URL. Built from this workspace's connection
+                credentials if None.
             timeout: Timeout in seconds for the clone operation (default 600s).
         """
         if repo_url is None:
-            token = self.settings.github_token.get_secret_value()
-            repo_url = f"https://x-access-token:{token}@github.com/{self.workspace.repo_name}.git"
+            owner, _, repo = self.workspace.repo_name.partition("/")
+            repo_url = self._remote_url(owner, repo)
 
         # Build clone command (single-branch for faster clone)
         cmd = ["git", "clone", "--single-branch", repo_url, str(self.repo_path)]
@@ -99,6 +129,7 @@ class GitOperations:
                 text=True,
                 check=True,
                 timeout=timeout,
+                env=self._git_env(),
             )
             elapsed = time.time() - start_time
             logger.info(f"Clone completed for {self.workspace.repo_name} in {elapsed:.1f}s")
@@ -135,7 +166,7 @@ class GitOperations:
         """
         branch = self.workspace.branch_name
         logger.info(f"Syncing with {remote}/{branch} before implementing changes")
-        self._run_git("fetch", remote)
+        self._run_git("fetch", remote, f"{branch}:refs/remotes/{remote}/{branch}", check=False)
         if not self.remote_branch_exists(branch, remote=remote):
             logger.info(
                 "Remote branch %s/%s does not exist yet; skipping rebase before first push",
@@ -153,8 +184,7 @@ class GitOperations:
             fork_owner: Owner of the fork repository.
             fork_repo: Name of the fork repository.
         """
-        token = self.settings.github_token.get_secret_value()
-        fork_url = f"https://x-access-token:{token}@github.com/{fork_owner}/{fork_repo}.git"
+        fork_url = self._remote_url(fork_owner, fork_repo)
 
         # Check if remote already exists
         result = self._run_git("remote", check=False)
@@ -214,6 +244,7 @@ class GitOperations:
         # create it tracking the specified remote.
         result = self._run_git("checkout", branch, check=False)
         if result.returncode != 0:
+            self._run_git("fetch", remote, f"{branch}:refs/remotes/{remote}/{branch}", check=False)
             self._run_git("checkout", "-b", branch, f"{remote}/{branch}")
 
         logger.info(f"Checked out branch {branch}")
@@ -292,6 +323,13 @@ class GitOperations:
         """
         result = self._run_git("ls-remote", "--heads", "--", remote, branch_name, check=False)
         return bool(result.stdout.strip())
+
+    def get_remote_branch_sha(self, branch_name: str, remote: str = "origin") -> str | None:
+        """Return the remote branch SHA without changing local repository state."""
+        result = self._run_git("ls-remote", "--heads", "--", remote, branch_name, check=False)
+        if result.returncode != 0 or not result.stdout.strip():
+            return None
+        return result.stdout.split()[0]
 
     def check_for_conflicts(self, target_branch: str = "main") -> tuple[bool, list[str]]:
         """Check if pushing would cause conflicts with remote.
@@ -451,6 +489,36 @@ class GitOperations:
         self._run_git("reset", "--hard", "HEAD")
         self._run_git("clean", "-fd")
         logger.info("Reset workspace to HEAD")
+
+    def checkout_commit(self, sha: str) -> None:
+        """Checkout a specific commit SHA (detached HEAD).
+
+        Args:
+            sha: The commit SHA to checkout.
+        """
+        self._run_git("checkout", sha)
+        logger.info(f"Checked out commit {sha}")
+
+    def has_commits_ahead(self, base_branch: str = "main") -> bool:
+        """Check if the current branch has commits ahead of the upstream default branch.
+
+        Args:
+            base_branch: The upstream default branch to compare against.
+
+        Returns:
+            True if the branch has commits ahead of origin/base_branch.
+        """
+        try:
+            result = self._run_git(
+                "log",
+                f"origin/{base_branch}..HEAD",
+                "--oneline",
+                check=True,
+            )
+            return bool(result.stdout.strip())
+        except Exception as e:
+            logger.warning(f"Error checking branch commits for {self.repo_path}: {e}")
+            return False
 
 
 class GitError(Exception):

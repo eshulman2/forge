@@ -1,54 +1,62 @@
-"""Comment classification for Forge Q&A mode."""
+"""Compatibility import for the provider-neutral interaction classifier."""
 
 import re
-from enum import StrEnum
+from typing import Any
+
+from forge.domain.interactions import CommentType, classify_comment
+
+_COMMAND = re.compile(r"^\s*/forge\s+([a-zA-Z0-9_-]+)", re.IGNORECASE)
+_PAIR = re.compile(r'\s*([a-zA-Z_][a-zA-Z0-9_-]*)\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s\'"]+))')
 
 
-class CommentType(StrEnum):
-    """Type of comment detected in Jira comments."""
-
-    QUESTION = "question"
-    FEEDBACK = "feedback"
-    INFORMATIONAL = "informational"
-
-
-# Legacy @forge ask pattern (case insensitive).
-_FORGE_ASK_PATTERN = re.compile(r"^\s*@forge\s+ask", re.IGNORECASE)
-
-# Pattern for question mark at start (allowing leading whitespace)
-_QUESTION_MARK_PATTERN = re.compile(r"^\s*\?")
-
-# Pattern for revision prefix (allowing leading whitespace)
-_REVISION_PATTERN = re.compile(r"^\s*!")
+def _parse_pairs(text: str) -> dict[str, str]:
+    result: dict[str, str] = {}
+    position = 0
+    while position < len(text):
+        match = _PAIR.match(text, position)
+        if not match:
+            raise ValueError(f"Malformed parameters or trailing junk near: '{text[position:]}'")
+        result[match.group(1)] = next(value for value in match.groups()[1:] if value is not None)
+        position = match.end()
+    return result
 
 
-def classify_comment(comment_text: str) -> CommentType:
-    """Classify a comment into question, feedback, or informational.
+def parse_comment_command(comment_text: str) -> dict[str, Any] | None:
+    """Parse PR 242 draft-edit commands while classification stays provider-neutral."""
+    match = _COMMAND.match(comment_text or "")
+    if not match:
+        return None
+    command = match.group(1).lower()
+    if command not in {"remove", "exclude", "add", "update", "approve"}:
+        return None
+    arguments = comment_text[match.end() :].strip()
+    if command == "approve":
+        return (
+            {"command": command}
+            if not arguments
+            else {
+                "command": command,
+                "error": "The approve command does not accept parameters",
+            }
+        )
+    if command in {"remove", "exclude"}:
+        if arguments.isdigit():
+            return {"command": command, "id": int(arguments)}
+        return {"command": command, "error": f"Invalid integer ID for {command} command"}
+    if command == "add":
+        if not arguments:
+            return {"command": command, "error": "The add command requires parameters"}
+        try:
+            return {"command": command, "params": _parse_pairs(arguments)}
+        except ValueError as exc:
+            return {"command": command, "error": str(exc)}
+    identifier, _, pairs = arguments.partition(" ")
+    if not identifier.isdigit():
+        return {"command": command, "error": "Invalid integer ID for update command"}
+    try:
+        return {"command": command, "id": int(identifier), "params": _parse_pairs(pairs)}
+    except ValueError as exc:
+        return {"command": command, "error": str(exc)}
 
-    Classification rules:
-    - Questions: Comments starting with '?'
-    - Feedback (revision request): Comments starting with '!'
-    - Informational: Everything else — ignored by the workflow
 
-    Approvals are handled exclusively via label changes (forge:*-approved),
-    not via comment text.
-
-    Args:
-        comment_text: The text of the comment to classify.
-
-    Returns:
-        The classified comment type.
-    """
-    if not comment_text or not comment_text.strip():
-        return CommentType.INFORMATIONAL
-
-    if _QUESTION_MARK_PATTERN.match(comment_text):
-        return CommentType.QUESTION
-
-    if _FORGE_ASK_PATTERN.match(comment_text):
-        return CommentType.QUESTION
-
-    if _REVISION_PATTERN.match(comment_text):
-        return CommentType.FEEDBACK
-
-    return CommentType.INFORMATIONAL
+__all__ = ["CommentType", "classify_comment", "parse_comment_command"]

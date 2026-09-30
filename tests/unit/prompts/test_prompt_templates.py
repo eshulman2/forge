@@ -261,6 +261,7 @@ class TestPromptContent:
         # Should include the provided content
         assert "Test requirements" in result
         assert "Test context" in result
+        assert "inspect every target repository" in result
 
     def test_task_takeover_triage_prompt(self):
         """task-takeover-triage prompt should allow contained tasks without formal sections."""
@@ -412,3 +413,100 @@ class TestAllV1Prompts:
             # If we got here, encoding was fine
             # Additionally verify it's printable/reasonable
             assert template.isprintable() or "\n" in template
+
+
+class TestModelTierCommentTemplate:
+    """Contract tests for the deterministic model-tier rationale comment.
+
+    The ``model-tier-comment`` template renders a no-LLM Jira comment body
+    explaining the estimated model tier.  It must carry the verbatim marker
+    line ``forge.model-tier: {tier}`` as its own paragraph (Section 9.2), a
+    human-readable *Why* section rendering the estimator rationale
+    (SC-003 / BR-002), and an override-instructions section telling humans the
+    ``forge:model-tier:*`` label is human-owned/sticky (Section 9.6 / BR-012 /
+    NFR-006).
+    """
+
+    def _render(self, tier="heavy", why_section="- Signal A\n- Signal B", demotion_section=""):
+        """Render the template with a full set of substitution variables."""
+        return load_prompt(
+            "model-tier-comment",
+            version="v1",
+            marker=f"forge.model-tier: {tier}",
+            tier=tier,
+            why_section=why_section,
+            demotion_section=demotion_section,
+            tier_label_prefix="forge:model-tier:",
+            marker_prefix="forge.model-tier:",
+        )
+
+    def test_template_exists_and_loads(self):
+        """The template file exists under v1 and loads via load_prompt."""
+        assert "model-tier-comment" in list_prompts("v1")
+        body = self._render()
+        assert body, "Rendered body should not be empty"
+
+    def test_all_variables_substituted(self):
+        """Every {variable} placeholder is substituted in the rendered body."""
+        body = self._render(
+            tier="standard",
+            why_section="- The change touches a single module",
+        )
+
+        assert "{marker}" not in body
+        assert "{tier}" not in body
+        assert "{why_section}" not in body
+        assert "{demotion_section}" not in body
+        assert "{tier_label_prefix}" not in body
+        assert "{marker_prefix}" not in body
+
+    def test_marker_line_is_its_own_paragraph(self):
+        """The verbatim marker line stands alone as a paragraph (\\n\\n split)."""
+        body = self._render(tier="heavy")
+
+        marker_line = "forge.model-tier: heavy"
+        assert marker_line in body
+
+        # Paragraphs are delimited by blank lines; the marker must be a whole
+        # paragraph on its own so _text_to_adf renders it verbatim (Section 9.2).
+        paragraphs = [p.strip() for p in body.split("\n\n")]
+        assert marker_line in paragraphs, (
+            "Marker line must be its own standalone paragraph, not embedded in "
+            "another markdown construct"
+        )
+
+    def test_why_section_renders_rationale(self):
+        """The Why section surfaces the estimator rationale verbatim."""
+        body = self._render(
+            tier="heavy",
+            why_section="- Distributed system redesign\n- Cross-service migration",
+        )
+
+        assert "Why" in body
+        assert "Distributed system redesign" in body
+        assert "Cross-service migration" in body
+
+    def test_demotion_section_rendered_for_light_tier(self):
+        """The explicit demotion basis is rendered for the light tier."""
+        demotion_section = (
+            "## Demotion basis\n\n"
+            "This ticket was demoted to the light tier because the signals "
+            "above indicate a small, isolated change.\n\n"
+        )
+        body = self._render(
+            tier="light",
+            why_section="- Fix a typo in a tooltip",
+            demotion_section=demotion_section,
+        )
+
+        assert "demot" in body.lower(), "Light tier body must state the demotion basis"
+
+    def test_override_instructions_section_present(self):
+        """The override-instructions section explains the human-owned label."""
+        body = self._render(tier="standard")
+
+        # References the human-settable label prefix (Section 9.6 / BR-012).
+        assert "forge:model-tier:" in body
+        # Tells humans they can override / change the tier themselves.
+        lowered = body.lower()
+        assert "overrid" in lowered

@@ -31,7 +31,8 @@ RUN pip install --no-cache-dir \
     langfuse \
     httpx \
     pydantic \
-    pydantic-settings
+    pydantic-settings \
+    PyYAML
 
 # OpenShift runs containers with an arbitrary non-root UID. The universal
 # image keeps Python under /home/codespace, so make the runtime traversable

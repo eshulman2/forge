@@ -13,13 +13,15 @@ import uuid
 from datetime import datetime
 from functools import wraps
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar, cast
 
 from deepagents import create_deep_agent
 from deepagents.backends.filesystem import FilesystemBackend
+from langchain.agents.structured_output import ProviderStrategy, ToolStrategy
 from langchain_anthropic import ChatAnthropic
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
+from pydantic import BaseModel
 
 # Optional MCP support
 try:
@@ -32,6 +34,7 @@ except ImportError:
     HAS_MCP = False
 
 from forge.config import Settings, get_settings
+from forge.integrations.agents.structured_outputs import ArtifactDocument, EpicDecomposition
 from forge.integrations.langfuse import get_langfuse_config, get_langfuse_context
 from forge.integrations.langfuse.fields import resolve_trace_fields
 from forge.model_policy import resolve_model_target_for_project
@@ -67,6 +70,7 @@ MCP_CONFIG_PATHS = [
 ]
 
 logger = logging.getLogger(__name__)
+StructuredResponseT = TypeVar("StructuredResponseT", bound=BaseModel)
 
 _TRACE_FIELD_KEYS = frozenset(
     {
@@ -502,6 +506,7 @@ class ForgeAgent:
         include_tools: bool = True,
         ticket_key: str | None = None,
         model_target: ResolvedModelTarget | None = None,
+        response_format: Any | None = None,
     ) -> Any:
         """Create a Deep Agent instance with configured skills and MCP tools.
 
@@ -545,6 +550,7 @@ class ForgeAgent:
             system_prompt=system_prompt,
             checkpointer=self._checkpointer,
             tools=mcp_tools if mcp_tools else None,
+            response_format=response_format,
         )
 
         return agent
@@ -665,7 +671,8 @@ class ForgeAgent:
         tags: list[str] | None = None,
         metadata: dict[str, Any] | None = None,
         model_target: ResolvedModelTarget | None = None,
-    ) -> str:
+        response_schema: type[StructuredResponseT] | None = None,
+    ) -> str | StructuredResponseT:
         """Run the agent with the given prompt.
 
         Implements exponential backoff retry for rate limit errors.
@@ -684,11 +691,13 @@ class ForgeAgent:
             Agent response text.
         """
         # Use async version to load MCP tools
+        response_format = ProviderStrategy(response_schema) if response_schema else None
         agent = await self._create_agent_async(
             system_prompt=system_prompt,
             include_tools=include_tools,
             ticket_key=ticket_key,
             model_target=model_target,
+            response_format=response_format,
         )
 
         # Generate unique thread ID for this conversation
@@ -723,6 +732,8 @@ class ForgeAgent:
             metadata=langfuse_ctx_params.get("metadata"),
         ):
             last_error: Exception | None = None
+            structured_result: StructuredResponseT | None = None
+            used_tool_fallback = False
             for attempt in range(self.MAX_RETRIES):
                 try:
                     result = await agent.ainvoke(
@@ -731,9 +742,34 @@ class ForgeAgent:
                         },
                         config=config,
                     )
+                    if response_schema is not None:
+                        if not isinstance(result, dict) or "structured_response" not in result:
+                            raise ValueError(
+                                f"Structured output for {response_schema.__name__} "
+                                "was not returned by the model"
+                            )
+                        structured_result = response_schema.model_validate(
+                            result["structured_response"]
+                        )
                     break  # Success, exit retry loop
                 except Exception as e:
                     last_error = e
+                    if response_schema is not None and not used_tool_fallback:
+                        logger.warning(
+                            "Native structured output failed for %s; retrying with validated "
+                            "tool strategy: %s",
+                            response_schema.__name__,
+                            e,
+                        )
+                        agent = await self._create_agent_async(
+                            system_prompt=system_prompt,
+                            include_tools=include_tools,
+                            ticket_key=ticket_key,
+                            model_target=model_target,
+                            response_format=ToolStrategy(response_schema),
+                        )
+                        used_tool_fallback = True
+                        continue
                     if self._is_transient_error(e) and attempt < self.MAX_RETRIES - 1:
                         # Calculate backoff delay
                         explicit_delay = self._extract_retry_delay(e)
@@ -753,6 +789,11 @@ class ForgeAgent:
                 # All retries exhausted
                 if last_error:
                     raise last_error
+
+        if response_schema is not None:
+            if structured_result is None:
+                raise ValueError(f"No valid structured output for {response_schema.__name__}")
+            return structured_result
 
         # Extract response text from messages
         # Deep Agents returns LangChain message objects, not dicts
@@ -808,7 +849,8 @@ class ForgeAgent:
         trace_context: dict[str, Any] | None = None,
         include_tools: bool = True,
         policy_key: str | None = None,
-    ) -> str:
+        response_schema: type[StructuredResponseT] | None = None,
+    ) -> str | StructuredResponseT:
         """Run a task, letting the agent choose the best approach.
 
         Deep Agents discovers skills automatically from the configured paths
@@ -900,11 +942,29 @@ class ForgeAgent:
             tags=trace_tags or None,
             metadata=trace_metadata or None,
             model_target=model_target,
+            response_schema=response_schema,
         )
         observe_agent_duration(task_type=task, duration=time.monotonic() - _start)
 
-        logger.info(f"Task '{task}' completed ({len(result)} chars)")
+        result_size = len(result) if isinstance(result, str) else len(result.model_dump_json())
+        logger.info(f"Task '{task}' completed ({result_size} chars)")
         return result
+
+    async def run_structured_task(
+        self,
+        task: str,
+        prompt: str,
+        response_schema: type[StructuredResponseT],
+        **kwargs: Any,
+    ) -> StructuredResponseT:
+        """Run the complete tool loop and validate its final response against a schema."""
+        result = await self.run_task(
+            task,
+            prompt,
+            response_schema=response_schema,
+            **kwargs,
+        )
+        return cast(StructuredResponseT, result)
 
     def _load_mcp_config(self) -> dict[str, Any]:
         """Load MCP server configuration from JSON file.
@@ -1037,7 +1097,7 @@ class ForgeAgent:
         self,
         raw_requirements: str,
         context: dict[str, Any] | None = None,
-    ) -> str:
+    ) -> ArtifactDocument:
         """Generate a structured PRD from raw requirements.
 
         Uses the 'generate-prd' skill from configured skill paths.
@@ -1052,30 +1112,31 @@ class ForgeAgent:
         prompt = load_prompt(
             "generate-prd",
             raw_requirements=raw_requirements,
-            context=_prompt_context_fields(context, ("project_key", "summary")),
+            context=_prompt_context_fields(context, ("project_key", "summary", "available_repos")),
         )
 
         logger.info("Generating PRD using Deep Agents with skill")
-        result = await self.run_task(
+        result = await self.run_structured_task(
             task="generate-prd",
             policy_key="generate_prd",
+            response_schema=ArtifactDocument,
             prompt=prompt,
             context={
                 "ticket_key": context.get("ticket_key", "") if context else "",
                 "project_key": context.get("project_key", "") if context else "",
+                "available_repos": context.get("available_repos", []) if context else [],
             },
             trace_context=_forward_trace_fields(context),
         )
 
-        result = self._strip_preamble(result)
-        logger.info(f"Generated PRD ({len(result)} chars)")
+        logger.info(f"Generated PRD ({len(result.content)} chars)")
         return result
 
     async def generate_spec(
         self,
         prd_content: str,
         context: dict[str, Any] | None = None,
-    ) -> str:
+    ) -> ArtifactDocument:
         """Generate a behavioral specification from a PRD.
 
         Uses the 'generate-spec' skill from configured skill paths.
@@ -1090,23 +1151,65 @@ class ForgeAgent:
         prompt = load_prompt(
             "generate-spec",
             prd_content=prd_content,
-            context=_prompt_context_fields(context, ("project_key", "summary")),
+            context=_prompt_context_fields(context, ("project_key", "summary", "available_repos")),
         )
 
         logger.info("Generating Spec using Deep Agents with skill")
-        result = await self.run_task(
+        result = await self.run_structured_task(
             task="generate-spec",
             policy_key="generate_spec",
+            response_schema=ArtifactDocument,
             prompt=prompt,
             context={
                 "ticket_key": context.get("ticket_key", "") if context else "",
                 "project_key": context.get("project_key", "") if context else "",
+                "available_repos": context.get("available_repos", []) if context else [],
             },
             trace_context=_forward_trace_fields(context),
         )
 
-        result = self._strip_preamble(result)
-        logger.info(f"Generated specification ({len(result)} chars)")
+        logger.info(f"Generated specification ({len(result.content)} chars)")
+        return result
+
+    async def regenerate_document_with_feedback(
+        self,
+        original_content: str,
+        feedback: str,
+        content_type: str,
+        ticket_key: str | None = None,
+        context: dict[str, Any] | None = None,
+    ) -> ArtifactDocument:
+        """Regenerate a PRD or specification with explicit repository selection."""
+        if content_type not in {"prd", "spec"}:
+            raise ValueError(
+                f"Unsupported document type for structured regeneration: {content_type}"
+            )
+        prompt = load_prompt(
+            "regenerate",
+            content_type=content_type.upper(),
+            original_content=original_content,
+            feedback=feedback,
+        )
+        prompt += (
+            "\n\n## Repository selection\n\n"
+            "Select every affected repository from the configured available repositories. "
+            "Your structured response must include those exact repository names.\n\n"
+            f"Available repositories: {context.get('available_repos', []) if context else []}"
+        )
+        result = await self.run_structured_task(
+            task=f"generate-{content_type}",
+            policy_key=f"generate_{content_type}",
+            response_schema=ArtifactDocument,
+            prompt=prompt,
+            context={
+                "is_revision": True,
+                "ticket_key": ticket_key or "",
+                "project_key": context.get("project_key", "") if context else "",
+                "available_repos": context.get("available_repos", []) if context else [],
+            },
+            trace_context=_forward_trace_fields(context),
+        )
+        logger.info(f"Regenerated {content_type} ({len(result.content)} chars)")
         return result
 
     async def generate_epics(
@@ -1157,9 +1260,10 @@ NOTE: No repositories configured. Use REPO: unknown for now."""
             )
 
         logger.info("Generating Epics using Deep Agents with skill")
-        result = await self.run_task(
+        result = await self.run_structured_task(
             task="decompose-epics",
             policy_key="decompose_epics",
+            response_schema=EpicDecomposition,
             prompt=prompt,
             context={
                 "ticket_key": context.get("ticket_key", "") if context else "",
@@ -1170,7 +1274,9 @@ NOTE: No repositories configured. Use REPO: unknown for now."""
             trace_context=_forward_trace_fields(context),
         )
 
-        epics = self._parse_epics_response(result)
+        epics = [
+            {"summary": epic.summary, "plan": epic.plan, "repo": epic.repo} for epic in result.epics
+        ]
         logger.info(f"Generated {len(epics)} Epics")
         return epics
 
@@ -1226,55 +1332,6 @@ NOTE: No repositories configured. Use REPO: unknown for now."""
         result = self._strip_preamble(result)
         logger.info(f"Regenerated {content_type} ({len(result)} chars)")
         return result
-
-    @staticmethod
-    def _parse_epics_response(response: str) -> list[dict[str, str]]:
-        """Parse the Epic generation response into structured data.
-
-        Args:
-            response: Raw response from agent.
-
-        Returns:
-            List of Epic dicts with 'summary', 'plan', and 'repo'.
-        """
-        import re
-
-        epics = []
-        current_epic: dict[str, str] = {}
-        current_section = None
-        plan_lines: list[str] = []
-
-        for line in response.split("\n"):
-            stripped = line.strip()
-
-            if stripped.startswith("---"):
-                if current_epic.get("summary"):
-                    current_epic["plan"] = "\n".join(plan_lines).strip()
-                    epics.append(current_epic)
-                    current_epic = {}
-                    plan_lines = []
-                continue
-
-            if stripped.startswith("EPIC:"):
-                current_epic["summary"] = stripped[5:].strip()
-                current_section = "summary"
-            elif stripped.startswith("REPO:"):
-                # Extract repo (owner/name format)
-                repo = stripped[5:].strip()
-                # Clean up any extra text
-                repo = re.sub(r"[^a-zA-Z0-9/_-]", "", repo)
-                if "/" in repo:
-                    current_epic["repo"] = repo
-            elif stripped.startswith("PLAN:"):
-                current_section = "plan"
-            elif current_section == "plan":
-                plan_lines.append(line)
-
-        if current_epic.get("summary"):
-            current_epic["plan"] = "\n".join(plan_lines).strip()
-            epics.append(current_epic)
-
-        return epics
 
     async def answer_question(
         self,
@@ -1350,6 +1407,88 @@ NOTE: No repositories configured. Use REPO: unknown for now."""
 
         logger.info(f"Generated answer ({len(result)} chars)")
         return result.strip() if result else ""
+
+    async def revise_draft_with_feedback(
+        self,
+        draft_content: str,
+        feedback: str,
+        context: dict[str, Any] | None = None,
+    ) -> str:
+        """Revise draft content based on user feedback.
+
+        Uses the 'revision-draft' prompt template to guide the LLM to output
+        the revised draft JSON.
+
+        Args:
+            draft_content: The current draft JSON content.
+            feedback: Natural language feedback.
+            context: Optional context from the workflow state.
+
+        Returns:
+            The updated draft JSON string.
+        """
+        from langchain_core.output_parsers import StrOutputParser
+
+        # Format context into a readable string/JSON
+        context_str = json.dumps(context, indent=2) if context else "None provided"
+
+        # Load the prompt template using project's load_prompt
+        prompt_text = load_prompt(
+            "revision-draft",
+            draft_content=draft_content,
+            feedback=feedback,
+            context=context_str,
+        )
+
+        model = self._create_model()
+        chain = model | StrOutputParser()
+
+        logger.info("Revising draft using direct LangChain model chain")
+        response = await chain.ainvoke(prompt_text)
+
+        # Strip preamble/narration and validate as JSON
+        cleaned_text = response.strip()
+
+        # Check markdown code blocks first
+        pattern = r"```(?:json)?\s*([\s\S]*?)\s*```"
+        match = re.search(pattern, cleaned_text)
+        if match:
+            cleaned_text = match.group(1).strip()
+        else:
+            # If no code block, look for the JSON object/list boundary
+            # Find the first occurrence of '{' or '[' and the last of '}' or ']'
+            start_brace = cleaned_text.find("{")
+            start_bracket = cleaned_text.find("[")
+
+            # Determine which starts first
+            start_idx = -1
+            if start_brace != -1 and start_bracket != -1:
+                start_idx = min(start_brace, start_bracket)
+            elif start_brace != -1:
+                start_idx = start_brace
+            elif start_bracket != -1:
+                start_idx = start_bracket
+
+            if start_idx != -1:
+                # Find the last brace or bracket matching the start type
+                if start_idx == start_brace:
+                    end_idx = cleaned_text.rfind("}")
+                else:
+                    end_idx = cleaned_text.rfind("]")
+
+                if end_idx > start_idx:
+                    cleaned_text = cleaned_text[start_idx : end_idx + 1].strip()
+
+        try:
+            parsed_json = json.loads(cleaned_text)
+            validated_json_str = json.dumps(parsed_json, indent=2)
+            logger.info(
+                f"Successfully revised draft and validated JSON ({len(validated_json_str)} chars)"
+            )
+            return validated_json_str
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse LLM response as valid JSON: {e}\nResponse: {response}")
+            raise ValueError(f"Failed to parse revised draft as JSON: {e}")
 
     async def close(self) -> None:
         """Close the agent and cleanup resources."""

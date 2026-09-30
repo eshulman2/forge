@@ -729,7 +729,7 @@ To print the currently installed Forge package version, run:
 uv run forge version
 ```
 
-This will print the package version in the format `Forge v<version>` (e.g., `Forge v0.1.0`) and exit with a success status code.
+This will print the package version in the format `Forge v<version>` (e.g., `Forge v1.0.0`) and exit with a success status code.
 
 ### Worker logs
 
@@ -872,6 +872,18 @@ curl -X POST http://localhost:8000/api/v1/webhooks/github \
 |---------|--------|-----------|
 | `/forge skip-gate <name>` | Skip named CI check | CI stages |
 | `/forge unskip-gate <name>` | Remove a skip | CI stages |
+
+### Jira comment commands
+
+These commands are used on the parent Jira ticket during the draft review stages (Epic Plan and Tasks).
+
+| Command | Effect | Active at |
+|---------|--------|-----------|
+| `/forge approve` | Approve draft and provision sub-tickets | `plan_approval_gate`, `task_approval_gate` |
+| `/forge remove <ID>` | Remove a draft item by local sequential ID | `plan_approval_gate`, `task_approval_gate` |
+| `/forge exclude <ID>` | Toggle the exclusion flag of a draft item | `plan_approval_gate`, `task_approval_gate` |
+| `/forge update <ID> key=val` | Update fields (`summary`, `description`, `repo`) of a draft item | `plan_approval_gate`, `task_approval_gate` |
+| `/forge add key=val` | Add a new proposed item to the draft | `plan_approval_gate`, `task_approval_gate` |
 
 ### Jira labels
 

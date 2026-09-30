@@ -84,6 +84,14 @@ Point Jira and GitHub webhooks at your server.
 
     **Events:** Pull requests, Pull request reviews, Check runs, Issue comments
 
+=== "GitLab"
+
+    **URL:** `https://your-server.com/api/v1/webhooks/gitlab`
+
+    Configure an explicit GitLab connection and repository in `repos.yaml`, then
+    set its `webhook_secret_env` value as the GitLab webhook secret. Select Merge
+    request, Note, Pipeline, and Push events.
+
 For local development you have two options:
 
 === "forge-poller (recommended)"

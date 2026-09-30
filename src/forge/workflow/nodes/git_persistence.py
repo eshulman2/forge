@@ -4,6 +4,7 @@ import asyncio
 import logging
 from enum import StrEnum
 
+from forge.workflow.effect_runtime import push_repository
 from forge.workspace.git_ops import GitOperations
 
 logger = logging.getLogger(__name__)
@@ -75,13 +76,20 @@ def classify_push_failure(error: Exception) -> PushFailureKind:
 async def push_to_fork_with_retry(
     git: GitOperations,
     *,
+    use_fork: bool = True,
     max_attempts: int = 3,
     initial_delay_seconds: float = 1.0,
 ) -> None:
-    """Push a workflow branch, retrying only failures known to be transient."""
+    """Push a workflow branch, retrying only failures known to be transient.
+
+    Args:
+        git: Git operations bound to the workspace.
+        use_fork: Push to the 'fork' remote (default, fork mode). When False
+            (direct mode — no fork identity), pushes to 'origin' instead.
+    """
     for attempt in range(1, max_attempts + 1):
         try:
-            git.push_to_fork()
+            await push_repository(git, use_fork=use_fork, force=False, check_conflicts=False)
             return
         except Exception as exc:
             kind = classify_push_failure(exc)
@@ -96,6 +104,15 @@ async def push_to_fork_with_retry(
                 exc,
             )
             await asyncio.sleep(delay)
+
+
+def use_fork_remote(state: dict) -> bool:
+    """Whether this workflow's write target is a fork (vs. direct-to-origin).
+
+    Fork identity (fork_owner/fork_repo) is only populated in state for
+    change_request_mode == "fork" repos; direct-mode repos leave both empty.
+    """
+    return bool(state.get("fork_owner") and state.get("fork_repo"))
 
 
 def build_persistence_error_state(

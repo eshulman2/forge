@@ -13,7 +13,9 @@ from forge.workflow.nodes.git_persistence import (
     PushPersistenceError,
     build_persistence_error_state,
     push_to_fork_with_retry,
+    use_fork_remote,
 )
+from forge.workflow.nodes.repository_scope import review_repository_scope
 from forge.workflow.nodes.review_utils import (
     next_review_attempt,
     parse_review_verdict,
@@ -79,7 +81,7 @@ def route_local_review(state: WorkflowState) -> str:
         state: Current workflow state after local_review_changes ran.
 
     Returns:
-        Next node name: 'create_pr' or 'implement_bug_fix'.
+        Next node name: 'create_pr' or 'implement_work'.
     """
     return state.get("current_node", "create_pr")
 
@@ -89,7 +91,7 @@ async def local_review_changes(state: WorkflowState) -> WorkflowState:
 
     For bug tickets: runs qualitative review (local-review-bug.md) that checks
     root-cause alignment and test coverage. Parses verdict; routes to
-    implement_bug_fix on non-adequate verdicts (up to 2 retries), then create_pr.
+    implement_work on non-adequate verdicts (up to 2 retries), then create_pr.
 
     For other tickets: runs mechanical review (local-review prompt) to find and
     fix breaking issues in-place.
@@ -98,7 +100,7 @@ async def local_review_changes(state: WorkflowState) -> WorkflowState:
         state: Current workflow state.
 
     Returns:
-        Updated state routing to create_pr or implement_bug_fix.
+        Updated state routing to create_pr or implement_work.
     """
     ticket_key = state["ticket_key"]
     ticket_type = state.get("ticket_type")
@@ -106,7 +108,7 @@ async def local_review_changes(state: WorkflowState) -> WorkflowState:
     local_workspace_survived = bool(recorded_workspace and Path(recorded_workspace).exists())
 
     try:
-        workspace_path, git = prepare_workspace(state)
+        workspace_path, git = await prepare_workspace(state)
         state = {**state, "workspace_path": workspace_path}
     except Exception as exc:
         logger.error("Unable to prepare local-review workspace for %s: %s", ticket_key, exc)
@@ -121,7 +123,7 @@ async def local_review_changes(state: WorkflowState) -> WorkflowState:
     )
     if state.get("review_push_pending") and same_workspace_survived:
         try:
-            await push_to_fork_with_retry(git)
+            await push_to_fork_with_retry(git, use_fork=use_fork_remote(state))
         except PushPersistenceError as exc:
             return _review_persistence_error_state(state, exc)
         updates = state.get("review_push_pending_updates", {})
@@ -171,6 +173,9 @@ async def _run_bug_review(state: WorkflowState, git: GitOperations) -> WorkflowS
         fix_approach_title=fix_approach.get("title", ""),
         fix_approach_description=fix_approach.get("description", ""),
         plan_content=plan_content,
+    )
+    task_description = (
+        review_repository_scope(current_repo, workspace_path) + "\n\n" + task_description
     )
 
     try:
@@ -246,9 +251,9 @@ async def _run_bug_review(state: WorkflowState, git: GitOperations) -> WorkflowS
                 "local_review_verdict": verdict,
                 "qualitative_feedback": feedback or None,
                 "qualitative_retry_count": new_retry_count,
-                "current_node": "implement_bug_fix",
+                "current_node": "implement_work",
                 "last_error": None,
-                # Reset so implement_task re-runs the container instead of seeing "all done"
+                # Reset so implement_work re-runs the container instead of seeing "all done"
                 "implemented_tasks": [],
                 "current_task_key": linked_task_keys[0] if linked_task_keys else None,
             },
@@ -332,6 +337,9 @@ async def _run_feature_review(state: WorkflowState, git: GitOperations) -> Workf
         workspace_path=workspace_path,
         spec_content=spec_content[:3000] if spec_content else "Not available",
         guardrails=guardrails[:2000] if guardrails else "",
+    )
+    task_description = (
+        review_repository_scope(current_repo, workspace_path) + "\n\n" + task_description
     )
 
     try:
@@ -417,7 +425,7 @@ async def _persist_review_result(
 ) -> WorkflowState:
     """Persist review changes before applying the review's routing decision."""
     try:
-        await push_to_fork_with_retry(git)
+        await push_to_fork_with_retry(git, use_fork=use_fork_remote(state))
     except PushPersistenceError as exc:
         pending_state = {
             **state,

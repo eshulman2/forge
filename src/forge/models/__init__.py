@@ -1,6 +1,7 @@
 """Domain models for Forge orchestrator."""
 
 from forge.models.artifacts import Epic, Feature, Task
+from forge.models.draft import DraftItem, ForgeDecompositionDraft
 from forge.models.events import EventSource, EventStatus, WebhookEvent
 from forge.models.workflow import (
     ForgeLabel,
@@ -23,6 +24,8 @@ __all__ = [
     "Feature",
     "Epic",
     "Task",
+    "DraftItem",
+    "ForgeDecompositionDraft",
     # Event models
     "WebhookEvent",
     "EventSource",

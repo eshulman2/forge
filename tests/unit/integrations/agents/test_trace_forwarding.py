@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from forge.integrations.agents.agent import ForgeAgent, _forward_trace_fields
+from forge.integrations.agents.structured_outputs import ArtifactDocument
 
 
 class TestForwardTraceFields:
@@ -95,16 +96,20 @@ class TestGeneratePrdTraceForwarding:
             "retry_count": 1,
             "project_key": "PROJ",
             "summary": "Build auth",
+            "available_repos": ["acme/auth-service"],
         }
 
-        with patch.object(agent, "run_task", new_callable=AsyncMock) as mock_run:
-            mock_run.return_value = "# PRD\n\nContent"
+        with patch.object(agent, "run_structured_task", new_callable=AsyncMock) as mock_run:
+            mock_run.return_value = ArtifactDocument(
+                content="# PRD\n\nContent", repositories=["acme/auth-service"]
+            )
             await agent.generate_prd("Build auth system", context=context)
 
         # Prompt context contains only task-relevant fields
         call_ctx = mock_run.call_args.kwargs["context"]
         assert call_ctx["ticket_key"] == "PROJ-42"
         assert call_ctx["project_key"] == "PROJ"
+        assert call_ctx["available_repos"] == ["acme/auth-service"]
         assert "ticket_type" not in call_ctx
         assert "summary" not in call_ctx
 
@@ -117,6 +122,7 @@ class TestGeneratePrdTraceForwarding:
         assert call_trace["retry_count"] == 1
 
         rendered_prompt = mock_run.call_args.kwargs["prompt"]
+        assert "acme/auth-service" in rendered_prompt
         assert "ticket_type" not in rendered_prompt
         assert "current_node" not in rendered_prompt
         assert "event_type" not in rendered_prompt
@@ -126,19 +132,21 @@ class TestGeneratePrdTraceForwarding:
     @pytest.mark.asyncio
     async def test_handles_none_context(self) -> None:
         agent = ForgeAgent()
-        with patch.object(agent, "run_task", new_callable=AsyncMock) as mock_run:
-            mock_run.return_value = "# PRD\n\nContent"
+        with patch.object(agent, "run_structured_task", new_callable=AsyncMock) as mock_run:
+            mock_run.return_value = ArtifactDocument(
+                content="# PRD\n\nContent", repositories=["acme/repo"]
+            )
             await agent.generate_prd("Build something", context=None)
 
         call_ctx = mock_run.call_args.kwargs["context"]
-        assert call_ctx == {"ticket_key": "", "project_key": ""}
+        assert call_ctx == {"ticket_key": "", "project_key": "", "available_repos": []}
 
     @pytest.mark.asyncio
     async def test_project_key_defaults_to_empty(self) -> None:
         agent = ForgeAgent()
         context: dict[str, Any] = {"ticket_key": "PROJ-42"}
-        with patch.object(agent, "run_task", new_callable=AsyncMock) as mock_run:
-            mock_run.return_value = "# PRD"
+        with patch.object(agent, "run_structured_task", new_callable=AsyncMock) as mock_run:
+            mock_run.return_value = ArtifactDocument(content="# PRD", repositories=["acme/repo"])
             await agent.generate_prd("Requirements", context=context)
 
         call_ctx = mock_run.call_args.kwargs["context"]
@@ -158,8 +166,10 @@ class TestGenerateSpecTraceForwarding:
             "event_type": "issue_updated",
             "project_key": "PROJ",
         }
-        with patch.object(agent, "run_task", new_callable=AsyncMock) as mock_run:
-            mock_run.return_value = "# Spec\n\nContent"
+        with patch.object(agent, "run_structured_task", new_callable=AsyncMock) as mock_run:
+            mock_run.return_value = ArtifactDocument(
+                content="# Spec\n\nContent", repositories=["acme/repo"]
+            )
             await agent.generate_spec("PRD content", context=context)
 
         call_ctx = mock_run.call_args.kwargs["context"]
@@ -194,8 +204,12 @@ class TestGenerateEpicsTraceForwarding:
             "feature_summary": "Auth system",
             "available_repos": ["acme/backend", "acme/frontend"],
         }
-        with patch.object(agent, "run_task", new_callable=AsyncMock) as mock_run:
-            mock_run.return_value = "---\nEPIC: Test\nREPO: acme/backend\nPLAN:\n1. Do it\n---"
+        from forge.integrations.agents.structured_outputs import EpicDecomposition, EpicItem
+
+        with patch.object(agent, "run_structured_task", new_callable=AsyncMock) as mock_run:
+            mock_run.return_value = EpicDecomposition(
+                epics=[EpicItem(summary="Test", repo="acme/backend", plan="1. Do it")]
+            )
             await agent.generate_epics("Spec content", context=context)
 
         # Prompt context contains only task-relevant fields

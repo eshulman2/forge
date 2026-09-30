@@ -2,18 +2,29 @@
 
 import asyncio
 import logging
-import re
-from typing import Any
+from datetime import UTC, datetime
+from typing import Any, cast
 
-from forge.integrations.agents import ForgeAgent
-from forge.integrations.jira.client import JiraClient, MissingProjectConfig
+from forge.models.draft import DraftItem, ForgeDecompositionDraft
 from forge.models.workflow import ForgeLabel
 from forge.prompts import load_prompt
+from forge.workflow.effect_runtime import JiraClient
 from forge.workflow.feature.state import FeatureState as WorkflowState
-from forge.workflow.utils import update_state_timestamp
+from forge.workflow.projections.agent_operation import project_agent_operation
+from forge.workflow.projections.artifact_generation import project_artifact_generation
+from forge.workflow.stations.agent_operation import (
+    AgentOperation,
+    AgentOperationInput,
+)
+from forge.workflow.stations.artifact_generation import (
+    ArtifactKind,
+)
+from forge.workflow.stations.runner import invoke_builtin_station
+from forge.workflow.utils import check_direct_mode, check_yolo_mode, update_state_timestamp
+from forge.workflow.utils.draft_manager import DraftManager
 from forge.workflow.utils.jira_status import post_status_comment
 from forge.workflow.utils.references import fetch_and_inject_references
-from forge.workflow.utils.repo_resolution import get_effective_default_repo
+from forge.workflow.utils.workflow_identity import workflow_identity_labels
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +47,18 @@ async def generate_tasks(state: WorkflowState) -> WorkflowState:
     ticket_key = state["ticket_key"]
     epic_keys = state.get("epic_keys", [])
 
+    # Revision-3 workflows created before draft provisioning became an
+    # explicit declarative node route approval directly to generate_tasks.
+    if not epic_keys and state.get("plan_draft"):
+        from forge.workflow.gates.plan_approval import provision_epics_from_draft
+
+        jira = JiraClient()
+        try:
+            epic_keys = await provision_epics_from_draft(state, jira)
+            state = {**state, "epic_keys": epic_keys}
+        finally:
+            await jira.close()
+
     if not epic_keys:
         logger.warning(f"No Epics found for task generation on {ticket_key}")
         return {
@@ -47,7 +70,6 @@ async def generate_tasks(state: WorkflowState) -> WorkflowState:
     logger.info(f"Generating Tasks for {len(epic_keys)} Epics on {ticket_key}")
 
     jira = JiraClient()
-    agent = ForgeAgent()
 
     await post_status_comment(
         jira,
@@ -71,6 +93,10 @@ async def generate_tasks(state: WorkflowState) -> WorkflowState:
         # Get project key from parent Feature
         parent_issue = await jira.get_issue(ticket_key)
         project_key = parent_issue.project_key
+        feature_labels = await jira.get_labels(ticket_key)
+
+        is_yolo = check_yolo_mode(state, feature_labels)
+        is_direct = check_direct_mode(state, feature_labels)
 
         # Pre-fetch all epic details upfront for sibling context
         for ek in epic_keys:
@@ -86,6 +112,8 @@ async def generate_tasks(state: WorkflowState) -> WorkflowState:
             except Exception as e:
                 logger.warning(f"Failed to pre-fetch Epic {ek}: {e}")
                 all_epics_details.append({"epic_key": ek, "epic_summary": ek, "epic_plan": ""})
+
+        proposed_tasks_list = []
 
         for epic_key in epic_keys:
             logger.info(f"Generating Tasks for Epic {epic_key}")
@@ -128,7 +156,7 @@ async def generate_tasks(state: WorkflowState) -> WorkflowState:
 
             # Generate Tasks using Deep Agents - primary operation
             tasks_data = await _generate_tasks_for_epic(
-                agent,
+                state,
                 epic_plan,
                 epic_summary,
                 context,
@@ -137,113 +165,236 @@ async def generate_tasks(state: WorkflowState) -> WorkflowState:
                 existing_tasks=created_tasks_context if created_tasks_context else None,
             )
 
-            # Create Tasks in Jira - secondary operation
+            # Create Tasks in Jira (YOLO) or collect (non-YOLO)
             for task in tasks_data:
                 summary = task.get("summary", "Untitled Task")
                 description = task.get("description", "")
                 repo = task.get("repo", "")
 
-                # Repo priority: task-level > epic-level > default config
+                # Repo priority: task-level > Epic label.  Do not silently
+                # route work to a project default repository.
                 if not repo or repo == "unknown" or "/" not in repo:
                     repo = epic_repo  # Inherit from Epic
-
-                if not repo or repo == "unknown" or "/" not in repo:
-                    try:
-                        repo = await get_effective_default_repo(jira, project_key)
-                    except MissingProjectConfig:
-                        repo = ""
 
                 if not repo or "/" not in repo:
                     logger.warning(
                         f"Task '{summary}' has no valid repo. "
-                        "Set repo labels on Feature/Epic or configure the default repository "
-                        "for the active mode (`forge.default_repo` in Jira or "
-                        "`GITHUB_DEFAULT_REPO` for local development)."
+                        f"Set a repo:<owner>/<repo> label on Task data or parent Epic {epic_key}."
                     )
                     repo = "unknown"
 
-                # Add labels: forge:managed for webhook routing, forge:parent for lookup, repo
-                labels = [
-                    ForgeLabel.FORGE_MANAGED.value,
-                    f"forge:parent:{ticket_key}",  # Parent Feature key
-                ]
-                if repo and repo != "unknown":
-                    labels.append(f"repo:{repo}")
+                if is_yolo or is_direct:
+                    # Add labels: forge:managed for webhook routing, forge:parent for lookup, repo
+                    labels = [
+                        ForgeLabel.FORGE_MANAGED.value,
+                        f"forge:parent:{ticket_key}",  # Parent Feature key
+                        *workflow_identity_labels(state),
+                    ]
+                    if repo and repo != "unknown":
+                        labels.append(f"repo:{repo}")
 
-                try:
-                    task_key = await jira.create_task(
-                        project_key=project_key,
-                        summary=summary,
-                        description=description,
-                        parent_key=epic_key,
-                        labels=labels,
+                    try:
+                        task_key = await jira.create_task(
+                            project_key=project_key,
+                            summary=summary,
+                            description=description,
+                            parent_key=epic_key,
+                            labels=labels,
+                        )
+
+                        all_task_keys.append(task_key)
+
+                        if repo == "unknown":
+                            try:
+                                await jira.add_comment(
+                                    task_key,
+                                    "⚠️ Forge could not assign this Task to a repository. "
+                                    f"The Task has no `repo:<owner>/<repo>` value and parent Epic "
+                                    f"{epic_key} has no valid `repo:<owner>/<repo>` label. "
+                                    "Add a repository label to this Task or its parent Epic, then retry routing.",
+                                )
+                            except Exception as exc:
+                                logger.warning(
+                                    "Failed to report missing repository on Task %s: %s",
+                                    task_key,
+                                    exc,
+                                )
+
+                        # Assign the model tier for the newly created Task (BR-011).
+                        # Comment/label failures MUST NOT fail Task creation
+                        # (BR-013 / SC-001): log but continue.
+                        try:
+                            await jira.resolve_and_maybe_assign_tier(task_key)
+                        except Exception as e:
+                            logger.warning(f"Failed to assign model tier to Task {task_key}: {e}")
+
+                        # Track by repository
+                        if repo != "unknown":
+                            tasks_by_repo.setdefault(repo, []).append(task_key)
+
+                        # Track for context in subsequent epic task generation
+                        created_tasks_context.append(
+                            {
+                                "epic_key": epic_key,
+                                "epic_summary": epic_summary,
+                                "task_key": task_key,
+                                "summary": summary,
+                            }
+                        )
+
+                        logger.info(f"Created Task {task_key}: {summary} (repo: {repo})")
+                    except Exception as e:
+                        # Log but continue creating remaining Tasks
+                        jira_error = str(e)
+                        logger.warning(f"Failed to create Task '{summary}' for {ticket_key}: {e}")
+                else:
+                    # Non-YOLO mode: collect proposed task details for draft
+                    proposed_tasks_list.append(
+                        {
+                            "summary": summary,
+                            "description": description,
+                            "repo": repo,
+                            "epic_key": epic_key,
+                        }
                     )
-
-                    all_task_keys.append(task_key)
-
-                    # Track by repository
-                    if repo not in tasks_by_repo:
-                        tasks_by_repo[repo] = []
-                    tasks_by_repo[repo].append(task_key)
-
-                    # Track for context in subsequent epic task generation
+                    # Track for context in sibling generations
+                    virtual_key = f"Draft Task {len(proposed_tasks_list)}"
                     created_tasks_context.append(
                         {
                             "epic_key": epic_key,
                             "epic_summary": epic_summary,
-                            "task_key": task_key,
+                            "task_key": virtual_key,
                             "summary": summary,
                         }
                     )
 
-                    logger.info(f"Created Task {task_key}: {summary} (repo: {repo})")
+        if is_yolo or is_direct:
+            logger.info(
+                f"Created {len(all_task_keys)} Tasks for {ticket_key}, awaiting implementation approval"
+            )
+
+            # If we created some Tasks, advance even with partial failures
+            if all_task_keys:
+                # Only set workflow label after confirming tasks were created
+                try:
+                    await jira.set_workflow_label(ticket_key, ForgeLabel.TASK_PENDING)
                 except Exception as e:
-                    # Log but continue creating remaining Tasks
                     jira_error = str(e)
-                    logger.warning(f"Failed to create Task '{summary}' for {ticket_key}: {e}")
+                    logger.warning(f"Failed to set workflow label for {ticket_key}: {e}")
 
-        logger.info(
-            f"Created {len(all_task_keys)} Tasks for {ticket_key}, awaiting implementation approval"
-        )
+                await jira.add_comment(
+                    ticket_key,
+                    "## 🤖 Forge interaction options\n\n"
+                    f"- ✅ **Approve:** replace `{ForgeLabel.TASK_PENDING.value}` with `{ForgeLabel.TASK_APPROVED.value}` to continue.\n"
+                    "- ♻️ **Revise all tasks:** add a comment starting with `!` on this ticket.\n"
+                    "- 🔧 **Revise a single task:** add a comment starting with `!` on the Task.\n"
+                    "- ❓ **Ask a question:** add a Jira comment starting with `?`.\n\n"
+                    "### Supported Workflow Modes\n"
+                    "1. **Default Draft Review Flow:** Forge attaches a draft JSON and posts a detailed markdown preview. Users can use `/forge` commands or comment starting with `!` to revise, and approve via `/forge approve` or replacing `forge:task-pending` with `forge:task-approved`.\n"
+                    "2. **Direct Mode (`forge:direct-mode`):** Forge directly creates the Task issues in Jira, then pauses awaiting human approval (replace `forge:task-pending` with `forge:task-approved`).\n"
+                    "3. **YOLO Mode (`forge:yolo`):** Forge bypasses human approval gates, automatically creating the Task issues in Jira and auto-advancing without pausing.",
+                )
+                return cast(
+                    WorkflowState,
+                    update_state_timestamp(
+                        {
+                            **state,
+                            "task_keys": all_task_keys,
+                            "tasks_by_repo": tasks_by_repo,
+                            "feedback_comment": None,
+                            "revision_requested": False,
+                            "current_task_key": None,
+                            "current_epic_key": None,
+                            "current_node": "task_approval_gate",
+                            "is_paused": not is_yolo,
+                            "last_error": f"Partial Jira failure: {jira_error}"
+                            if jira_error
+                            else None,
+                        }
+                    ),
+                )
+            else:
+                # No Tasks created at all - this is a failure
+                return cast(
+                    WorkflowState,
+                    {
+                        **state,
+                        "last_error": jira_error or "Failed to create any Tasks in Jira",
+                        "current_node": "generate_tasks",
+                        "retry_count": state.get("retry_count", 0) + 1,
+                    },
+                )
+        else:
+            # Non-YOLO mode: Draft Review Flow
+            if not proposed_tasks_list:
+                return cast(
+                    WorkflowState,
+                    {
+                        **state,
+                        "last_error": "Failed to generate any draft Tasks",
+                        "current_node": "generate_tasks",
+                        "retry_count": state.get("retry_count", 0) + 1,
+                    },
+                )
 
-        # If we created some Tasks, advance even with partial failures
-        if all_task_keys:
-            # Only set workflow label after confirming tasks were created
+            # Convert proposed_tasks_list into DraftItem instances
+            draft_items = []
+            for idx, task_item in enumerate(proposed_tasks_list, start=1):
+                summary = task_item.get("summary", "Untitled Task")
+                description = task_item.get("description", "")
+                repo = task_item.get("repo", "unknown")
+                item_epic_key = task_item.get("epic_key")
+                draft_items.append(
+                    DraftItem(
+                        id=idx,
+                        summary=summary,
+                        description=description,
+                        repo=repo,
+                        epic_key=item_epic_key,
+                        acceptance_criteria=[],
+                        excluded=False,
+                    )
+                )
+
+            # Create Draft model
+            draft = ForgeDecompositionDraft(
+                parent_key=ticket_key,
+                phase="tasks",
+                items=draft_items,
+                version=1,
+                created_at=datetime.now(UTC),
+                updated_at=datetime.now(UTC),
+            )
+
+            # Post task draft review comments to Epic tickets and a navigation comment on Feature
+            await DraftManager.post_task_draft_review(jira, ticket_key, draft)
+
+            # Set workflow label to pending
             try:
                 await jira.set_workflow_label(ticket_key, ForgeLabel.TASK_PENDING)
             except Exception as e:
                 jira_error = str(e)
                 logger.warning(f"Failed to set workflow label for {ticket_key}: {e}")
 
-            await jira.add_comment(
-                ticket_key,
-                "## 🤖 Forge interaction options\n\n"
-                f"- ✅ **Approve:** add `{ForgeLabel.TASK_APPROVED.value}` to continue.\n"
-                "- ♻️ **Revise all tasks:** add a comment starting with `!` on this ticket.\n"
-                "- 🔧 **Revise a single task:** add a comment starting with `!` on the Task.\n"
-                "- ❓ **Ask a question:** add a Jira comment starting with `?`.",
+            # Transition state to pause the workflow at the task_approval_gate (setting is_paused = True and appropriate workflow flags)
+            return cast(
+                WorkflowState,
+                update_state_timestamp(
+                    {
+                        **state,
+                        "tasks_draft": draft,
+                        "task_keys": [],
+                        "tasks_by_repo": {},
+                        "feedback_comment": None,
+                        "revision_requested": False,
+                        "current_task_key": None,
+                        "current_epic_key": None,
+                        "current_node": "task_approval_gate",
+                        "is_paused": True,
+                        "last_error": f"Partial Jira failure: {jira_error}" if jira_error else None,
+                    }
+                ),
             )
-            return update_state_timestamp(
-                {
-                    **state,
-                    "task_keys": all_task_keys,
-                    "tasks_by_repo": tasks_by_repo,
-                    "feedback_comment": None,
-                    "revision_requested": False,
-                    "current_task_key": None,
-                    "current_epic_key": None,
-                    "current_node": "task_approval_gate",
-                    "last_error": (f"Partial Jira failure: {jira_error}" if jira_error else None),
-                }
-            )
-        else:
-            # No Tasks created at all - this is a failure
-            return {
-                **state,
-                "last_error": jira_error or "Failed to create any Tasks in Jira",
-                "current_node": "generate_tasks",
-                "retry_count": state.get("retry_count", 0) + 1,
-            }
 
     except Exception as e:
         logger.error(f"Task generation failed for {ticket_key}: {e}")
@@ -257,13 +408,13 @@ async def generate_tasks(state: WorkflowState) -> WorkflowState:
         if all_task_keys:
             result_state["task_keys"] = all_task_keys
             result_state["tasks_by_repo"] = tasks_by_repo
-        return result_state
+        return cast(WorkflowState, result_state)
     finally:
         await jira.close()
 
 
 async def _generate_tasks_for_epic(
-    agent: ForgeAgent,
+    state: WorkflowState,
     epic_plan: str,
     epic_summary: str,
     context: dict[str, Any],
@@ -274,7 +425,7 @@ async def _generate_tasks_for_epic(
     """Generate Tasks for a single Epic.
 
     Args:
-        agent: Deep Agent client.
+        state: Workflow checkpoint used only to derive stable station identity.
         epic_plan: Epic implementation plan.
         epic_summary: Epic title/summary.
         context: Additional context.
@@ -305,14 +456,26 @@ async def _generate_tasks_for_epic(
             f"Please incorporate this feedback when creating the tasks."
         )
 
-    result = await agent.run_task(
-        task="generate-tasks",
-        policy_key="generate_tasks",
-        prompt=prompt,
-        context=context,
+    outcome = await invoke_builtin_station(
+        project_agent_operation(
+            state,
+            AgentOperationInput(
+                operation=AgentOperation.RUN_TASK,
+                task="generate-tasks",
+                policy_key="generate_tasks",
+                prompt=prompt,
+                context=context,
+                response_schema="generate_tasks",
+            ),
+            discriminator=f"generate-tasks:{epic_summary}",
+        )
     )
+    assert outcome.output is not None
 
-    return _parse_tasks_response(result)
+    structured = outcome.output.structured
+    if not isinstance(structured, dict) or not isinstance(structured.get("tasks"), list):
+        raise ValueError("Task generation returned no structured tasks")
+    return [dict(task) for task in structured["tasks"]]
 
 
 def _format_sibling_epics(sibling_epics: list[dict[str, str]] | None) -> str:
@@ -372,75 +535,6 @@ def _format_existing_tasks(existing_tasks: list[dict[str, str]] | None) -> str:
     return "\n".join(lines)
 
 
-def _parse_tasks_response(response: str) -> list[dict[str, str]]:
-    """Parse Task generation response into structured data.
-
-    Args:
-        response: Raw response from the configured LLM backend.
-
-    Returns:
-        List of Task dicts.
-    """
-    tasks = []
-    current_task: dict[str, str] = {}
-    current_section = None
-    section_lines: list[str] = []
-
-    for line in response.split("\n"):
-        stripped = line.strip()
-
-        if stripped.startswith("---"):
-            # Save previous task if exists
-            if current_task.get("summary"):
-                if current_section == "description":
-                    current_task["description"] = "\n".join(section_lines).strip()
-                elif current_section == "acceptance_criteria":
-                    # Append acceptance criteria to description
-                    criteria = "\n".join(section_lines).strip()
-                    current_task["description"] = (
-                        current_task.get("description", "")
-                        + "\n\nAcceptance Criteria:\n"
-                        + criteria
-                    ).strip()
-                tasks.append(current_task)
-                current_task = {}
-                section_lines = []
-            continue
-
-        if stripped.startswith("TASK:"):
-            current_task["summary"] = stripped[5:].strip()
-            current_section = "summary"
-        elif stripped.startswith("REPO:"):
-            repo = stripped[5:].strip().lower()
-            # Clean up repo name
-            repo = re.sub(r"[^a-z0-9/._-]", "", repo)
-            current_task["repo"] = repo if repo else "unknown"
-        elif stripped.startswith("DESCRIPTION:"):
-            current_section = "description"
-            section_lines = []
-        elif stripped.startswith("ACCEPTANCE_CRITERIA:"):
-            # Save description first
-            if current_section == "description":
-                current_task["description"] = "\n".join(section_lines).strip()
-            current_section = "acceptance_criteria"
-            section_lines = []
-        elif current_section in ("description", "acceptance_criteria"):
-            section_lines.append(line)
-
-    # Don't forget the last task
-    if current_task.get("summary"):
-        if current_section == "description":
-            current_task["description"] = "\n".join(section_lines).strip()
-        elif current_section == "acceptance_criteria":
-            criteria = "\n".join(section_lines).strip()
-            current_task["description"] = (
-                current_task.get("description", "") + "\n\nAcceptance Criteria:\n" + criteria
-            ).strip()
-        tasks.append(current_task)
-
-    return tasks
-
-
 def extract_repo_from_labels(labels: list[str]) -> str:
     """Extract repository name from Jira labels.
 
@@ -494,16 +588,19 @@ async def regenerate_all_tasks(state: WorkflowState) -> WorkflowState:
         }
 
         # Re-run task generation (which will incorporate feedback in context)
-        return await generate_tasks(updated_state)
+        return await generate_tasks(cast(WorkflowState, updated_state))
 
     except Exception as e:
         logger.error(f"Task regeneration failed for {ticket_key}: {e}")
-        return {
-            **state,
-            "last_error": str(e),
-            "current_node": "regenerate_all_tasks",
-            "retry_count": state.get("retry_count", 0) + 1,
-        }
+        return cast(
+            WorkflowState,
+            {
+                **state,
+                "last_error": str(e),
+                "current_node": "regenerate_all_tasks",
+                "retry_count": state.get("retry_count", 0) + 1,
+            },
+        )
     finally:
         await jira.close()
 
@@ -539,7 +636,6 @@ async def regenerate_epic_tasks(state: WorkflowState) -> WorkflowState:
     logger.info(f"Regenerating tasks for Epic {epic_key} on {ticket_key} with feedback")
 
     jira = JiraClient()
-    agent = ForgeAgent()
 
     try:
         # Identify which tasks belong to this epic (fetched concurrently)
@@ -634,7 +730,7 @@ async def regenerate_epic_tasks(state: WorkflowState) -> WorkflowState:
         spec_content = await fetch_and_inject_references(state, jira, spec_content)
 
         tasks_data = await _generate_tasks_for_epic(
-            agent,
+            state,
             epic_plan,
             epic_summary,
             context,
@@ -665,17 +761,13 @@ async def regenerate_epic_tasks(state: WorkflowState) -> WorkflowState:
 
             if not repo or repo == "unknown" or "/" not in repo:
                 repo = epic_repo
-            if not repo or repo == "unknown" or "/" not in repo:
-                try:
-                    repo = await get_effective_default_repo(jira, project_key)
-                except MissingProjectConfig:
-                    repo = ""
             if not repo or "/" not in repo:
                 repo = "unknown"
 
             labels = [
                 ForgeLabel.FORGE_MANAGED.value,
                 f"forge:parent:{ticket_key}",
+                *workflow_identity_labels(state),
             ]
             if repo and repo != "unknown":
                 labels.append(f"repo:{repo}")
@@ -689,7 +781,31 @@ async def regenerate_epic_tasks(state: WorkflowState) -> WorkflowState:
                     labels=labels,
                 )
                 new_task_keys.append(task_key)
-                remaining_tasks_by_repo.setdefault(repo, []).append(task_key)
+
+                if repo == "unknown":
+                    try:
+                        await jira.add_comment(
+                            task_key,
+                            "⚠️ Forge could not assign this Task to a repository. "
+                            f"The Task has no `repo:<owner>/<repo>` value and parent Epic "
+                            f"{epic_key} has no valid `repo:<owner>/<repo>` label. "
+                            "Add a repository label to this Task or its parent Epic, then retry routing.",
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "Failed to report missing repository on Task %s: %s", task_key, exc
+                        )
+
+                # Assign the model tier for the newly created Task (BR-011).
+                # Comment/label failures MUST NOT fail Task creation
+                # (BR-013 / SC-001): log but continue.
+                try:
+                    await jira.resolve_and_maybe_assign_tier(task_key)
+                except Exception as e:
+                    logger.warning(f"Failed to assign model tier to Task {task_key}: {e}")
+
+                if repo != "unknown":
+                    remaining_tasks_by_repo.setdefault(repo, []).append(task_key)
                 logger.info(f"Created Task {task_key}: {summary} (repo: {repo})")
             except Exception as e:
                 jira_error = str(e)
@@ -747,34 +863,39 @@ async def regenerate_epic_tasks(state: WorkflowState) -> WorkflowState:
         all_task_keys = remaining_task_keys + new_task_keys
         logger.info(f"Regenerated {len(new_task_keys)} tasks for Epic {epic_key} on {ticket_key}")
 
-        return update_state_timestamp(
-            {
-                **state,
-                "task_keys": all_task_keys,
-                "tasks_by_repo": remaining_tasks_by_repo,
-                "feedback_comment": None,
-                "revision_requested": False,
-                "current_epic_key": None,
-                "current_node": "task_approval_gate",
-                "last_error": (f"Partial Jira failure: {jira_error}" if jira_error else None),
-            }
+        return cast(
+            WorkflowState,
+            update_state_timestamp(
+                {
+                    **state,
+                    "task_keys": all_task_keys,
+                    "tasks_by_repo": remaining_tasks_by_repo,
+                    "feedback_comment": None,
+                    "revision_requested": False,
+                    "current_epic_key": None,
+                    "current_node": "task_approval_gate",
+                    "last_error": f"Partial Jira failure: {jira_error}" if jira_error else None,
+                }
+            ),
         )
 
     except Exception as e:
         logger.error(f"Epic task regeneration failed for {epic_key} on {ticket_key}: {e}")
-        return {
-            **state,
-            "last_error": str(e),
-            "current_node": "regenerate_epic_tasks",
-            "retry_count": state.get("retry_count", 0) + 1,
-            # Clear revision flags so task_approval_gate returns END instead of looping
-            "revision_requested": False,
-            "feedback_comment": None,
-            "current_epic_key": None,
-        }
+        return cast(
+            WorkflowState,
+            {
+                **state,
+                "last_error": str(e),
+                "current_node": "regenerate_epic_tasks",
+                "retry_count": state.get("retry_count", 0) + 1,
+                # Clear revision flags so task_approval_gate returns END instead of looping
+                "revision_requested": False,
+                "feedback_comment": None,
+                "current_epic_key": None,
+            },
+        )
     finally:
         await jira.close()
-        await agent.close()
 
 
 async def update_single_task(state: WorkflowState) -> WorkflowState:
@@ -790,7 +911,7 @@ async def update_single_task(state: WorkflowState) -> WorkflowState:
     """
     ticket_key = state["ticket_key"]
     task_key = state.get("current_task_key")
-    feedback = state.get("feedback_comment", "")
+    feedback = state.get("feedback_comment") or ""
 
     if not task_key:
         logger.warning(f"No current_task_key for single Task update on {ticket_key}")
@@ -799,7 +920,6 @@ async def update_single_task(state: WorkflowState) -> WorkflowState:
     logger.info(f"Updating Task {task_key} with feedback")
 
     jira = JiraClient()
-    agent = ForgeAgent()
 
     try:
         # Get current Task description
@@ -811,22 +931,40 @@ async def update_single_task(state: WorkflowState) -> WorkflowState:
         )
 
         # Regenerate description with feedback
-        new_description = await agent.regenerate_with_feedback(
-            original_content=original_description_with_refs,
-            feedback=feedback,
-            content_type="task",
-            ticket_key=ticket_key,
-            context={
-                "ticket_type": state.get("ticket_type", ""),
-                "current_node": state.get("current_node", ""),
-                "event_type": state.get("event_type", ""),
-                "event_source": state.get("context", {}).get("source", ""),
-                "retry_count": state.get("retry_count", 0),
-            },
+        outcome = await invoke_builtin_station(
+            project_artifact_generation(
+                state,
+                kind=ArtifactKind.TASK,
+                source_content=original_description_with_refs,
+                feedback=feedback,
+                context={
+                    "ticket_type": state.get("ticket_type", ""),
+                    "current_node": state.get("current_node", ""),
+                    "event_type": state.get("event_type", ""),
+                    "event_source": state.get("context", {}).get("source", ""),
+                    "retry_count": state.get("retry_count", 0),
+                },
+            )
         )
+        assert outcome.output is not None
+        new_description = str(outcome.output.content)
 
         # Update Task in Jira
         await jira.update_description(task_key, new_description)
+
+        # Explicit Task revision may change complexity enough to warrant a
+        # different model tier — re-estimate from the *revised* description
+        # with overwrite (SC-006 / BR-009). Failures must not break revision.
+        try:
+            await jira.resolve_and_maybe_assign_tier(
+                task_key,
+                description=new_description,
+                allow_overwrite=True,
+            )
+        except Exception as tier_err:
+            logger.warning(
+                f"Failed to re-estimate model tier for {task_key} after revision: {tier_err}"
+            )
 
         # Add comment acknowledging revision
         await post_status_comment(
@@ -837,25 +975,30 @@ async def update_single_task(state: WorkflowState) -> WorkflowState:
 
         logger.info(f"Task {task_key} updated with feedback")
 
-        return update_state_timestamp(
-            {
-                **state,
-                "current_task_key": None,
-                "feedback_comment": None,
-                "revision_requested": False,
-                "current_node": "task_approval_gate",
-                "last_error": None,
-            }
+        return cast(
+            WorkflowState,
+            update_state_timestamp(
+                {
+                    **state,
+                    "current_task_key": None,
+                    "feedback_comment": None,
+                    "revision_requested": False,
+                    "current_node": "task_approval_gate",
+                    "last_error": None,
+                }
+            ),
         )
 
     except Exception as e:
         logger.error(f"Task update failed for {task_key}: {e}")
-        return {
-            **state,
-            "last_error": str(e),
-            "current_node": "update_single_task",
-            "retry_count": state.get("retry_count", 0) + 1,
-        }
+        return cast(
+            WorkflowState,
+            {
+                **state,
+                "last_error": str(e),
+                "current_node": "update_single_task",
+                "retry_count": state.get("retry_count", 0) + 1,
+            },
+        )
     finally:
         await jira.close()
-        await agent.close()

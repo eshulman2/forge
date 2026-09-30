@@ -1,6 +1,7 @@
 """Quick tests for container sandbox runner."""
 
 import asyncio
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -8,6 +9,11 @@ import pytest
 
 from forge.sandbox import ContainerRunner
 from forge.sandbox.runner import ContainerConfig
+
+pytestmark = pytest.mark.skipif(
+    shutil.which("podman") is None,
+    reason="podman is not available in PATH"
+)
 
 
 class TestContainerRunner:

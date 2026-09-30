@@ -1,7 +1,7 @@
 """Bug workflow state definition."""
 
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 
 from forge.config import get_settings
 from forge.models.workflow import TicketType
@@ -70,7 +70,7 @@ def create_initial_bug_state(ticket_key: str, **kwargs: Any) -> BugState:
     settings = get_settings()
 
     # Default values - can be overridden by kwargs
-    defaults = {
+    defaults: dict[str, Any] = {
         "thread_id": ticket_key,
         "ticket_key": ticket_key,
         "ticket_type": TicketType.BUG,
@@ -118,6 +118,15 @@ def create_initial_bug_state(ticket_key: str, **kwargs: Any) -> BugState:
         "revision_requested": False,
         "messages": [],
         "context": {},
+        "artifacts": [],
+        "work_units": [],
+        "current_work_unit_id": None,
+        "work_resolution": {},
+        "repositories": [],
+        "current_repository": None,
+        "validations": [],
+        "publications": [],
+        "node_outcome": None,
         "qa_history": [],
         "generation_context": {},
         "is_question": False,
@@ -148,9 +157,10 @@ def create_initial_bug_state(ticket_key: str, **kwargs: Any) -> BugState:
         "qualitative_review_failed": False,
         "reflect_rca_retry_count": 0,
         "yolo_mode": False,
+        "direct_mode": False,
     }
 
     # Merge with kwargs, letting kwargs override defaults
     defaults.update(kwargs)
 
-    return BugState(**defaults)
+    return cast(BugState, defaults)

@@ -1,6 +1,12 @@
-"""Smoke tests for the concurrent CI/review gate design."""
+"""Smoke tests for the concurrent CI/review gate's routing-table shape.
 
-import pytest
+These only exercise routing functions with static state and graph compilation;
+they do not interleave a CI event and a review event against shared state. For
+a regression test covering the actual concurrent-webhook scenario, see
+test_review_arriving_during_in_flight_ci_cycle_is_not_dropped in
+tests/unit/orchestrator/test_worker.py.
+"""
+
 from langgraph.graph import END
 
 
@@ -83,7 +89,7 @@ class TestRoutingFunctions:
 class TestGraphCompilation:
     def test_feature_graph_compiles(self):
         """Feature graph builds without error after DRY refactor."""
-        from forge.workflow.feature.graph import build_feature_graph
+        from forge.workflow.feature.routing import build_feature_graph
 
         graph = build_feature_graph()
         compiled = graph.compile()
@@ -91,7 +97,7 @@ class TestGraphCompilation:
 
     def test_bug_graph_compiles(self):
         """Bug graph builds without error after DRY refactor."""
-        from forge.workflow.bug.graph import build_bug_graph
+        from forge.workflow.bug.routing import build_bug_graph
 
         graph = build_bug_graph()
         compiled = graph.compile()
@@ -99,7 +105,7 @@ class TestGraphCompilation:
 
     def test_task_takeover_graph_compiles(self):
         """Task takeover graph builds without error after DRY refactor."""
-        from forge.workflow.task_takeover.graph import build_task_takeover_graph
+        from forge.workflow.task_takeover.routing import build_task_takeover_graph
 
         graph = build_task_takeover_graph()
         compiled = graph.compile()

@@ -4,14 +4,29 @@ import asyncio
 import json
 import logging
 import re
-from typing import Any
+from typing import Any, cast
 
 import httpx
 from pydantic import ValidationError
 
 from forge.config import Settings, get_settings
 from forge.integrations.jira.models import JiraComment, JiraIssue
+from forge.models.model_tier import (
+    TIER_LABEL_PREFIX,
+    TIER_MARKER_PREFIX,
+    ModelTier,
+    format_marker,
+    parse_tier_label,
+    tier_label,
+)
+from forge.models.model_tier_estimator import estimate_tier
+from forge.models.model_tier_ownership import (
+    enforce_single_tier,
+    parse_latest_tier_marker,
+    resolve_ownership_kind,
+)
 from forge.models.workflow import ForgeLabel
+from forge.prompts import load_prompt
 from forge.skills.models import SkillEntry
 from forge.utils.redaction import redact_secrets
 
@@ -33,16 +48,25 @@ _ARTIFACT_APPROVAL_LABELS = {
     "task": ForgeLabel.TASK_APPROVED.value,
 }
 
+_ARTIFACT_PENDING_LABELS = {
+    "prd": ForgeLabel.PRD_PENDING.value,
+    "spec": ForgeLabel.SPEC_PENDING.value,
+    "plan": ForgeLabel.PLAN_PENDING.value,
+    "task": ForgeLabel.TASK_PENDING.value,
+}
+
 
 class MissingProjectConfig(Exception):
     """Raised when a required Jira project property is absent or malformed."""
 
 
 def artifact_interaction_options(comment_type: str) -> str:
-    approval_label = _ARTIFACT_APPROVAL_LABELS[comment_type.lower()]
+    normalized_type = comment_type.lower()
+    approval_label = _ARTIFACT_APPROVAL_LABELS[normalized_type]
+    pending_label = _ARTIFACT_PENDING_LABELS[normalized_type]
     return (
         "## 🤖 Forge interaction options\n\n"
-        f"- ✅ **Approve:** add `{approval_label}` to continue.\n"
+        f"- ✅ **Approve:** replace `{pending_label}` with `{approval_label}` to continue.\n"
         "- ♻️ **Request changes:** add a Jira comment starting with `!`, followed by the requested revision.\n"
         "- ❓ **Ask a question:** add a Jira comment starting with `?`."
     )
@@ -85,7 +109,6 @@ class JiraClient:
                 ),
                 headers={
                     "Accept": "application/json",
-                    "Content-Type": "application/json",
                 },
                 timeout=30.0,
             )
@@ -419,58 +442,86 @@ class JiraClient:
         Args:
             issue_key: The Jira issue key.
             filename: Name for the attachment file.
-            content: File content (string or bytes).
-            content_type: MIME type of the content.
+            content: File content as string or bytes.
+            content_type: The content type of the file.
 
         Returns:
             The attachment metadata from Jira API.
         """
-        # Attachments require a separate client without JSON content-type
-        async with httpx.AsyncClient(
-            base_url=self.base_url,
-            auth=(
-                self.settings.jira_user_email,
-                self.settings.jira_api_token.get_secret_value(),
-            ),
-            headers={
-                "Accept": "application/json",
-                "X-Atlassian-Token": "no-check",  # Required for attachments
-            },
-            timeout=60.0,
-        ) as client:
-            # Convert string to bytes if needed
-            if isinstance(content, str):
-                content = content.encode("utf-8")
+        if isinstance(content, str):
+            content = content.encode("utf-8")
 
-            files = {"file": (filename, content, content_type)}
-            response = await client.post(
-                f"/issue/{issue_key}/attachments",
-                files=files,
-            )
-            response.raise_for_status()
-            data = response.json()
-            logger.info(f"Added attachment {filename} to {issue_key}")
-            return data[0] if data else {}
+        if content_type == "text/markdown" and filename.endswith(".json"):
+            content_type = "application/json"
+
+        headers = {
+            "X-Atlassian-Token": "no-check",
+        }
+        files = {"file": (filename, content, content_type)}
+
+        response = await self._request_with_retry(
+            "POST",
+            f"/issue/{issue_key}/attachments",
+            headers=headers,
+            files=files,
+        )
+        response.raise_for_status()
+        data = response.json()
+        logger.info(f"Added attachment {filename} to {issue_key}")
+        return data[0] if data else {}
 
     async def get_attachments(self, issue_key: str) -> list[dict[str, Any]]:
-        """Get all attachments for a Jira issue.
+        """Get all attachments for a Jira issue by querying the issue's details.
 
         Args:
             issue_key: The Jira issue key.
 
         Returns:
-            List of attachment metadata dicts with 'id', 'filename', 'size', etc.
+            A list of attachment metadata dicts containing id, filename, and content URL.
         """
-        client = await self._get_client()
-        response = await client.get(
+        response = await self._request_with_retry(
+            "GET",
             f"/issue/{issue_key}",
             params={"fields": "attachment"},
         )
         response.raise_for_status()
         data = response.json()
         attachments = data.get("fields", {}).get("attachment", [])
-        logger.debug(f"Found {len(attachments)} attachments on {issue_key}")
-        return attachments
+
+        result = []
+        for att in attachments:
+            result.append(
+                {
+                    "id": att.get("id"),
+                    "filename": att.get("filename"),
+                    "content_url": att.get("content"),
+                }
+            )
+        logger.debug(f"Found {len(result)} attachments on {issue_key}")
+        return result
+
+    async def download_attachment(self, content_url: str) -> bytes:
+        """Download attachment raw binary content from the given content URL.
+
+        Args:
+            content_url: The full URL to download the attachment.
+
+        Returns:
+            The raw binary content of the attachment.
+        """
+        response = await self._request_with_retry("GET", content_url, follow_redirects=False)
+        if response.status_code in (301, 302, 303, 307, 308):
+            redirect_url = response.headers.get("Location")
+            if not redirect_url:
+                raise ValueError("Redirect response missing Location header")
+            logger.info("Downloading attachment securely via unauthenticated redirect")
+            async with httpx.AsyncClient(follow_redirects=True) as anon_client:
+                anon_response = await anon_client.get(redirect_url)
+                anon_response.raise_for_status()
+                return anon_response.content
+
+        response.raise_for_status()
+        return response.content
 
     async def delete_attachment(self, attachment_id: str) -> None:
         """Delete an attachment by ID.
@@ -478,8 +529,7 @@ class JiraClient:
         Args:
             attachment_id: The Jira attachment ID.
         """
-        client = await self._get_client()
-        response = await client.delete(f"/attachment/{attachment_id}")
+        response = await self._request_with_retry("DELETE", f"/attachment/{attachment_id}")
         response.raise_for_status()
         logger.info(f"Deleted attachment {attachment_id}")
 
@@ -522,6 +572,22 @@ class JiraClient:
         )
         response.raise_for_status()
         logger.info(f"Added remote link to {issue_key}: {url}")
+
+    async def get_remote_links(self, issue_key: str) -> list[dict[str, str]]:
+        """Return remote-link URLs and titles for idempotent reconciliation."""
+        client = await self._get_client()
+        response = await client.get(f"/issue/{issue_key}/remotelink")
+        response.raise_for_status()
+        links: list[dict[str, str]] = []
+        for item in response.json():
+            remote_object = item.get("object") or {}
+            links.append(
+                {
+                    "url": str(remote_object.get("url") or ""),
+                    "title": str(remote_object.get("title") or ""),
+                }
+            )
+        return links
 
     async def create_issue_link(
         self,
@@ -581,7 +647,13 @@ class JiraClient:
             )
         return result
 
-    async def add_comment(self, issue_key: str, body: str) -> JiraComment:
+    async def add_comment(
+        self,
+        issue_key: str,
+        body: str,
+        *,
+        properties: dict[str, Any] | None = None,
+    ) -> JiraComment:
         """Add a comment to a Jira issue.
 
         Args:
@@ -591,12 +663,28 @@ class JiraClient:
         Returns:
             The created JiraComment.
         """
+        if len(body) > 32767:
+            raise ValueError(
+                f"Comment body length ({len(body)}) exceeds maximum Jira limit of 32767 characters"
+            )
+
         client = await self._get_client()
         adf_content = self._text_to_adf(body)
 
         response = await client.post(
             f"/issue/{issue_key}/comment",
-            json={"body": adf_content},
+            json={
+                "body": adf_content,
+                **(
+                    {
+                        "properties": [
+                            {"key": key, "value": value} for key, value in properties.items()
+                        ]
+                    }
+                    if properties
+                    else {}
+                ),
+            },
         )
         response.raise_for_status()
         data = response.json()
@@ -609,6 +697,8 @@ class JiraClient:
         error_message: str,
         node_name: str,
         mention_account_ids: list[str] | None = None,
+        *,
+        properties: dict[str, Any] | None = None,
     ) -> JiraComment:
         """Add an error notification comment with user mentions.
 
@@ -684,7 +774,18 @@ class JiraClient:
 
         response = await client.post(
             f"/issue/{issue_key}/comment",
-            json={"body": adf_content},
+            json={
+                "body": adf_content,
+                **(
+                    {
+                        "properties": [
+                            {"key": key, "value": value} for key, value in properties.items()
+                        ]
+                    }
+                    if properties
+                    else {}
+                ),
+            },
         )
         response.raise_for_status()
         data = response.json()
@@ -699,6 +800,8 @@ class JiraClient:
         available_connections: str,
         fix_command: str,
         mention_account_ids: list[str] | None = None,
+        *,
+        properties: dict[str, Any] | None = None,
     ) -> JiraComment:
         """Post an actionable model-policy configuration error in Jira."""
         client = await self._get_client()
@@ -776,7 +879,18 @@ class JiraClient:
         ]
         response = await client.post(
             f"/issue/{issue_key}/comment",
-            json={"body": {"version": 1, "type": "doc", "content": content}},
+            json={
+                "body": {"version": 1, "type": "doc", "content": content},
+                **(
+                    {
+                        "properties": [
+                            {"key": key, "value": value} for key, value in properties.items()
+                        ]
+                    }
+                    if properties
+                    else {}
+                ),
+            },
         )
         response.raise_for_status()
         logger.info(f"Added model policy error guidance to {issue_key}")
@@ -799,7 +913,11 @@ class JiraClient:
         while True:
             response = await client.get(
                 f"/issue/{issue_key}/comment",
-                params={"startAt": start_at, "maxResults": max_results},
+                params={
+                    "startAt": start_at,
+                    "maxResults": max_results,
+                    "expand": "properties",
+                },
             )
             response.raise_for_status()
             data = response.json()
@@ -863,7 +981,7 @@ class JiraClient:
     async def set_workflow_label(
         self,
         issue_key: str,
-        new_label: ForgeLabel,
+        new_label: ForgeLabel | str,
         remove_prefix: str = "forge:",
     ) -> None:
         """Set a workflow label, removing other forge: labels.
@@ -876,6 +994,8 @@ class JiraClient:
             new_label: The new workflow label to set.
             remove_prefix: Prefix of labels to remove (default: "forge:").
         """
+        label_value = new_label.value if isinstance(new_label, ForgeLabel) else new_label
+
         # Get current labels
         current_labels = await self.get_labels(issue_key)
 
@@ -884,17 +1004,25 @@ class JiraClient:
             label
             for label in current_labels
             if label.startswith(remove_prefix)
-            and label != new_label.value
+            and label != label_value
             and label != ForgeLabel.FORGE_MANAGED.value
             and label != "forge:managed:task"
             and label != "forge:managed:task-takeover"
+            # A declarative workflow label identifies the graph definition. It
+            # is not a transient phase label and must survive phase changes.
+            and not label.startswith("forge:workflow:")
+            # The model-tier label records the selected model tier. It is owned
+            # by the tier-assignment flow, not the workflow-phase machinery, and
+            # must survive phase transitions without being stripped or duplicated
+            # (SC-007 / FN-005 / BR-005).
+            and not label.startswith(TIER_LABEL_PREFIX)
         ]
 
         # Build update operations
         operations: list[dict[str, str]] = []
         for label in labels_to_remove:
             operations.append({"remove": label})
-        operations.append({"add": new_label.value})
+        operations.append({"add": label_value})
 
         # Ensure forge:managed is set
         if ForgeLabel.FORGE_MANAGED.value not in current_labels:
@@ -907,7 +1035,7 @@ class JiraClient:
         )
         response.raise_for_status()
         logger.info(
-            f"Set workflow label {new_label.value} on {issue_key} (removed: {labels_to_remove})"
+            f"Set workflow label {label_value} on {issue_key} (removed: {labels_to_remove})"
         )
 
     async def add_structured_comment(
@@ -916,6 +1044,8 @@ class JiraClient:
         title: str,
         content: str,
         comment_type: str = "forge-artifact",
+        *,
+        properties: dict[str, Any] | None = None,
     ) -> JiraComment:
         """Add a structured comment with a marker for later retrieval.
 
@@ -939,7 +1069,7 @@ class JiraClient:
             f"[/FORGE:{comment_type.upper()}]\n\n"
             f"{artifact_interaction_options(comment_type)}"
         )
-        return await self.add_comment(issue_key, formatted_body)
+        return await self.add_comment(issue_key, formatted_body, properties=properties)
 
     async def get_structured_comment(
         self,
@@ -970,6 +1100,253 @@ class JiraClient:
 
         return None
 
+    # ------------------------------------------------------------------
+    # Model-tier labeling (AISOS-2445)
+    # ------------------------------------------------------------------
+    async def apply_tier_label(self, issue_key: str, tier: ModelTier) -> None:
+        """Enforce exactly one ``forge:model-tier:*`` label via a single PUT.
+
+        Reads the current labels, computes the add / remove operations through
+        the shared :func:`enforce_single_tier` helper, and issues a single
+        ``PUT /issue/{key}`` whose ``update.labels`` combines both so the
+        exactly-one-valid-tier invariant is applied atomically (FR-007 /
+        BR-004).  Non-tier labels are never touched and an already-correct tier
+        label is not removed.
+
+        Args:
+            issue_key: The Jira issue key.
+            tier: The tier whose label must become the sole tier label.
+
+        Raises:
+            ValueError / KeyError / TypeError: If ``tier`` is not a valid
+                :class:`ModelTier`.  No PUT is issued in that case, so labels
+                are left untouched.
+        """
+        # Reject out-of-set values before touching labels (BR-004).
+        tier = ModelTier(tier)
+
+        current_labels = await self.get_labels(issue_key)
+        change = enforce_single_tier(current_labels, tier)
+
+        operations: list[dict[str, str]] = []
+        for label in change.remove:
+            operations.append({"remove": label})
+        for label in change.add:
+            operations.append({"add": label})
+
+        if not operations:
+            logger.info(f"Tier label {tier_label(tier)} already set on {issue_key} (no-op)")
+            return
+
+        client = await self._get_client()
+        response = await client.put(
+            f"/issue/{issue_key}",
+            json={"update": {"labels": operations}},
+        )
+        response.raise_for_status()
+        logger.info(
+            f"Applied tier label {tier_label(tier)} on {issue_key} "
+            f"(added: {change.add}, removed: {change.remove})"
+        )
+
+    async def post_tier_comment(
+        self,
+        issue_key: str,
+        tier: ModelTier,
+        reasons: list[str],
+    ) -> JiraComment:
+        """Post a model-tier explanation comment via the shared prompt template.
+
+        Renders the ``model-tier-comment`` prompt and posts it through
+        :meth:`add_comment` (ADF conversion handled there).  The body carries
+        the verbatim marker line ``forge.model-tier: {tier}`` as its own
+        paragraph, a human-readable *Why* section that surfaces each estimator
+        reason verbatim, an explicit demotion basis for the ``light`` tier, and
+        an override-instructions section referencing the tier label mechanism
+        (FN-003 / Section 9.6 / BR-012 / NFR-006).
+
+        Args:
+            issue_key: The Jira issue key.
+            tier: The estimated model tier.
+            reasons: The estimator's non-empty list of reasons.
+
+        Returns:
+            The created :class:`JiraComment`.
+        """
+        tier = ModelTier(tier)
+
+        why_section = "\n".join(f"- {reason}" for reason in reasons)
+
+        demotion_section = ""
+        if tier == ModelTier.LIGHT:
+            demotion_section = (
+                "## Demotion basis\n\n"
+                "This ticket was demoted to the light tier because the signals "
+                "above indicate a small, isolated change. If that is inaccurate, "
+                "override the tier as described below.\n\n"
+            )
+
+        body = load_prompt(
+            "model-tier-comment",
+            marker=format_marker(tier),
+            tier=tier.value,
+            why_section=why_section,
+            demotion_section=demotion_section,
+            tier_label_prefix=TIER_LABEL_PREFIX,
+            marker_prefix=TIER_MARKER_PREFIX,
+        )
+
+        logger.info(f"Posting tier comment ({tier.value}) to {issue_key}")
+        return await self.add_comment(issue_key, body)
+
+    async def get_latest_tier_marker(self, issue_key: str) -> ModelTier | None:
+        """Return the tier from the most recent Forge marker comment, or ``None``.
+
+        Reads comments (chronological, newest-last) and scans them in reverse
+        order, reusing the shared latest-wins parser
+        :func:`parse_latest_tier_marker` per comment body.  A later *invalid*
+        marker never overrides an earlier valid one, and ``None`` is returned
+        when no valid marker is present (FN-006 / BR-008).
+
+        Args:
+            issue_key: The Jira issue key.
+
+        Returns:
+            The newest valid marker's tier, or ``None``.
+        """
+        comments = await self.get_comments(issue_key)
+
+        for comment in reversed(comments):
+            tier = parse_latest_tier_marker(comment.body)
+            if tier is not None:
+                logger.info(f"Latest tier marker on {issue_key}: {tier.value}")
+                return tier
+
+        logger.info(f"No tier marker found on {issue_key}")
+        return None
+
+    async def resolve_and_maybe_assign_tier(
+        self,
+        issue_key: str,
+        summary: str | None = None,
+        description: str | None = None,
+        *,
+        allow_overwrite: bool = False,
+    ) -> None:
+        """Reconcile a Task's model tier from its labels and latest marker.
+
+        Orchestration helper (SC-004 / SC-005 / SC-006):
+
+        * guards ``issuetype == "Task"`` as defense-in-depth (BR-006): non-Task
+          issues are skipped entirely;
+        * assigns + comments when there is no existing tier label (estimated via
+          the shared :func:`estimate_tier`, SC-004);
+        * treats marker/label divergence (or a missing marker) as **human-owned**
+          and no-ops unless ``allow_overwrite`` is set — never clobbers a
+          human-changed label back to the Forge marker (SC-005 / BR-012);
+        * no-ops when auto-owned (marker matches label) and overwrite is not
+          requested (SC-006);
+        * when ``allow_overwrite`` is set (explicit revision/retry), re-estimates
+          from summary/description and may overwrite the label + marker
+          (TS-015 / SC-006).
+
+        Args:
+            issue_key: The Jira issue key.
+            summary: Optional Task summary; when omitted the issue is fetched and
+                its summary is used for estimation.
+            description: Optional Task description; used alongside ``summary`` for
+                estimation when both are provided.
+            allow_overwrite: When ``True``, an explicit re-estimate may overwrite
+                an existing tier label (including human-owned). The default
+                (routine polling) leaves human-owned and in-sync labels untouched.
+        """
+        issue = await self.get_issue(issue_key)
+
+        # Task-only guard (BR-006).
+        if issue.issue_type != "Task":
+            logger.info(
+                f"Skipping tier resolution on {issue_key}: issue_type={issue.issue_type!r} is not Task"
+            )
+            return
+
+        estimate_summary = summary if summary is not None else issue.summary
+        estimate_description = description if description is not None else (issue.description or "")
+
+        # Preserve Jira's label order while de-duplicating recognized tiers so
+        # malformed multi-tier states can be repaired deterministically.
+        label_tiers = list(
+            dict.fromkeys(
+                tier for label in issue.labels if (tier := parse_tier_label(label)) is not None
+            )
+        )
+        current_label_tier = label_tiers[0] if label_tiers else None
+
+        marker_tier = await self.get_latest_tier_marker(issue_key)
+
+        # No existing tier label. A marker without a label is the recoverable
+        # half-state left when comment creation succeeded but label mutation
+        # failed; finish that assignment without posting a duplicate comment.
+        if current_label_tier is None:
+            if marker_tier is not None:
+                logger.info(
+                    f"Recovering tier label {marker_tier.value} on {issue_key} from existing marker"
+                )
+                await self.apply_tier_label(issue_key, marker_tier)
+                return
+
+            estimate = estimate_tier(estimate_summary, estimate_description or "")
+            logger.info(
+                f"Assigning estimated tier {estimate.tier.value} to {issue_key} (no existing tier)"
+            )
+            # Post the marker first. If it fails, no label is left behind to be
+            # mistaken for a human-owned override. If the subsequent label PUT
+            # fails, the marker branch above completes it on the next pass.
+            await self.post_tier_comment(issue_key, estimate.tier, estimate.reasons)
+            await self.apply_tier_label(issue_key, estimate.tier)
+            return
+
+        # Repair malformed states with multiple valid tier labels. If one label
+        # differs from Forge's marker, treat that label as the human override;
+        # otherwise retain the first Jira label. apply_tier_label removes every
+        # other valid tier label in one request, restoring the invariant.
+        if len(label_tiers) > 1:
+            human_tiers = [tier for tier in label_tiers if tier != marker_tier]
+            intended_tier = human_tiers[0] if human_tiers else current_label_tier
+            logger.warning(
+                f"Repairing multiple model-tier labels on {issue_key}; "
+                f"retaining {intended_tier.value}"
+            )
+            await self.apply_tier_label(issue_key, intended_tier)
+            return
+
+        ownership_kind = resolve_ownership_kind(
+            current_label_tier=current_label_tier,
+            latest_marker_tier=marker_tier,
+        )
+
+        # Human changed the label (or no Forge marker): sticky unless explicitly
+        # asked to overwrite. Never push the stale Forge marker onto the label.
+        if ownership_kind == "human-owned" and not allow_overwrite:
+            logger.info(
+                f"Tier on {issue_key} is human-owned "
+                f"(label={current_label_tier.value}, marker={getattr(marker_tier, 'value', None)}); "
+                "no-op"
+            )
+            return
+
+        # Explicit re-estimate (revision/retry) may overwrite any existing tier.
+        if allow_overwrite:
+            estimate = estimate_tier(estimate_summary, estimate_description or "")
+            logger.info(
+                f"Re-estimating tier on {issue_key}: "
+                f"{current_label_tier.value} -> {estimate.tier.value} (allow_overwrite)"
+            )
+            await self.apply_tier_label(issue_key, estimate.tier)
+            await self.post_tier_comment(issue_key, estimate.tier, estimate.reasons)
+            return
+
+        logger.info(f"Tier already in sync on {issue_key} ({current_label_tier.value}); no-op")
+
     async def search_issues(
         self,
         jql: str,
@@ -989,30 +1366,28 @@ class JiraClient:
         """
         client = await self._get_client()
         issues: list[JiraIssue] = []
-        start_at = 0
+        next_page_token: str | None = None
 
         while max_results is None or len(issues) < max_results:
             page_size = 100 if max_results is None else min(100, max_results - len(issues))
             params: dict[str, Any] = {
                 "jql": jql,
-                "startAt": start_at,
                 "maxResults": page_size,
             }
             if fields:
                 params["fields"] = ",".join(fields)
+            if next_page_token:
+                params["nextPageToken"] = next_page_token
 
-            response = await client.get("/search", params=params)
+            response = await client.get("/search/jql", params=params)
             response.raise_for_status()
             data = response.json()
             page = data.get("issues", [])
             issues.extend(JiraIssue.from_api_response(issue) for issue in page)
 
-            page_start = int(data.get("startAt", start_at))
-            total = int(data.get("total", page_start + len(page)))
-            next_start = page_start + len(page)
-            if not page or next_start >= total:
+            next_page_token = data.get("nextPageToken")
+            if not page or data.get("isLast", not next_page_token) or not next_page_token:
                 break
-            start_at = next_start
 
         return issues
 
@@ -1347,7 +1722,7 @@ class JiraClient:
             }
 
         try:
-            adf = convert(text)
+            adf = convert(JiraClient._prepare_markdown_for_adf(text))
         except Exception as e:
             logger.warning(f"ADF conversion failed, using simple fallback: {e}")
             # Simple fallback - just paragraphs
@@ -1368,7 +1743,57 @@ class JiraClient:
             }
 
         JiraClient._link_bare_urls(adf)
-        return adf
+        return cast(dict[str, Any], adf)
+
+    @staticmethod
+    def _prepare_markdown_for_adf(text: str) -> str:
+        """Preserve intentional newlines unsupported by ``md-to-adf``.
+
+        Agent-generated plans commonly use one logical step per line without
+        inserting Markdown blank lines. ``md-to-adf`` joins such lines with a
+        space, producing a single dense Jira paragraph. Separate consecutive
+        prose lines while leaving fenced code, tables, and list structures
+        untouched.
+        """
+        lines = text.split("\n")
+        table_lines: set[int] = set()
+        for index in range(len(lines) - 1):
+            if "|" not in lines[index]:
+                continue
+            if re.fullmatch(r"[\s|:-]+", lines[index + 1]):
+                table_lines.update({index, index + 1})
+                row_index = index + 2
+                while (
+                    row_index < len(lines) and "|" in lines[row_index] and lines[row_index].strip()
+                ):
+                    table_lines.add(row_index)
+                    row_index += 1
+
+        prepared: list[str] = []
+        in_fence = False
+        list_line = re.compile(r"^\s*(?:[-*+] |\d+[.)] )")
+
+        for index, line in enumerate(lines):
+            prepared.append(line)
+            if line.strip().startswith("```"):
+                in_fence = not in_fence
+                continue
+            if in_fence or index == len(lines) - 1:
+                continue
+
+            next_line = lines[index + 1]
+            if not line.strip() or not next_line.strip():
+                continue
+            if index in table_lines or index + 1 in table_lines:
+                continue
+            if list_line.match(line) or list_line.match(next_line):
+                continue
+            if line.startswith((" ", "\t")) or next_line.startswith((" ", "\t")):
+                continue
+
+            prepared.append("")
+
+        return "\n".join(prepared)
 
     @staticmethod
     def _link_bare_urls(node: dict[str, Any], *, in_code_block: bool = False) -> None:

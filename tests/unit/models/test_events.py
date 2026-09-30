@@ -1,6 +1,8 @@
 """Unit tests for event models."""
 
-from datetime import datetime
+from datetime import UTC, datetime
+
+import pytest
 
 from forge.models.events import (
     EventSource,
@@ -15,7 +17,7 @@ class TestEventSource:
     def test_event_sources_exist(self):
         """Verify event sources are defined."""
         assert EventSource.JIRA.value == "jira"
-        assert EventSource.GITHUB.value == "github"
+        assert EventSource.SOURCE_CONTROL.value == "source_control"
 
 
 class TestEventStatus:
@@ -52,12 +54,12 @@ class TestWebhookEvent:
         """Create a GitHub webhook event."""
         event = WebhookEvent(
             event_id="evt-002",
-            source=EventSource.GITHUB,
+            source=EventSource.SOURCE_CONTROL,
             event_type="check_run",
             ticket_key="TEST-123",
             payload={"action": "completed"},
         )
-        assert event.source == EventSource.GITHUB
+        assert event.source == EventSource.SOURCE_CONTROL
         assert event.event_type == "check_run"
 
     def test_default_status_is_pending(self):
@@ -130,7 +132,7 @@ class TestWebhookEvent:
         """Event has received_at timestamp."""
         event = WebhookEvent(
             event_id="evt-008",
-            source=EventSource.GITHUB,
+            source=EventSource.SOURCE_CONTROL,
             event_type="pull_request",
             ticket_key="TEST-456",
         )
@@ -148,3 +150,42 @@ class TestWebhookEvent:
         )
 
         assert event.processed_at is None
+
+    @pytest.mark.filterwarnings("error::DeprecationWarning")
+    def test_received_at_uses_current_utc_time(self):
+        before = datetime.now(UTC)
+        event = WebhookEvent(
+            event_id="evt-utc",
+            source=EventSource.JIRA,
+            event_type="jira:issue_updated",
+            ticket_key="TEST-123",
+        )
+        after = datetime.now(UTC)
+
+        assert event.received_at.tzinfo is UTC
+        assert before <= event.received_at <= after
+
+    @pytest.mark.filterwarnings("error::DeprecationWarning")
+    @pytest.mark.parametrize(
+        ("method", "args"),
+        [
+            ("mark_completed", ()),
+            ("mark_failed", ("Connection timeout",)),
+            ("mark_duplicate", ()),
+        ],
+    )
+    def test_terminal_status_uses_current_utc_time(self, method, args):
+        event = WebhookEvent(
+            event_id="evt-utc",
+            source=EventSource.JIRA,
+            event_type="jira:issue_updated",
+            ticket_key="TEST-123",
+            received_at=datetime.now(UTC),
+        )
+        before = datetime.now(UTC)
+        getattr(event, method)(*args)
+        after = datetime.now(UTC)
+
+        assert event.processed_at is not None
+        assert event.processed_at.tzinfo is UTC
+        assert event.received_at <= before <= event.processed_at <= after

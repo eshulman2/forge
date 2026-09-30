@@ -121,7 +121,10 @@ class TestJiraClientStructuredComments:
         body = jira_client.add_comment.call_args.args[1]
         assert body.startswith("[FORGE:PRD]\n# Product Requirements Document (PRD)")
         assert "[/FORGE:PRD]\n\n## 🤖 Forge interaction options" in body
-        assert "**Approve:** add `forge:prd-approved` to continue." in body
+        assert (
+            "**Approve:** replace `forge:prd-pending` with `forge:prd-approved` to continue."
+            in body
+        )
         assert "**Request changes:** add a Jira comment starting with `!`" in body
         assert "**Ask a question:** add a Jira comment starting with `?`." in body
         assert "@forge ask" not in body
@@ -192,17 +195,16 @@ class TestJiraClientEpicChildren:
 
         first_response = MagicMock()
         first_response.json.return_value = {
-            "startAt": 0,
             "maxResults": 50,
-            "total": 51,
             "issues": [issue(number) for number in range(1, 51)],
+            "nextPageToken": "page-2",
+            "isLast": False,
         }
         second_response = MagicMock()
         second_response.json.return_value = {
-            "startAt": 50,
             "maxResults": 50,
-            "total": 51,
             "issues": [issue(51)],
+            "isLast": True,
         }
         http = AsyncMock()
         http.get = AsyncMock(side_effect=[first_response, second_response])
@@ -212,8 +214,8 @@ class TestJiraClientEpicChildren:
 
         assert len(children) == 51
         assert children[-1].key == "TASK-51"
-        assert http.get.await_args_list[0].kwargs["params"]["startAt"] == 0
-        assert http.get.await_args_list[1].kwargs["params"]["startAt"] == 50
+        assert "nextPageToken" not in http.get.await_args_list[0].kwargs["params"]
+        assert http.get.await_args_list[1].kwargs["params"]["nextPageToken"] == "page-2"
 
 
 class TestJiraClientLabels:
@@ -294,6 +296,29 @@ class TestJiraClientLabels:
 
         assert any(op["remove"] == "forge:prd-pending" for op in remove_ops)
         assert any(op["add"] == ForgeLabel.PRD_APPROVED.value for op in add_ops)
+
+    @pytest.mark.asyncio
+    async def test_set_workflow_label_preserves_declarative_workflow_identity(self, mock_client):
+        mock_client.get_labels = AsyncMock(
+            return_value=[
+                "forge:managed",
+                "forge:workflow:planning-smoke",
+                "forge:prd-pending",
+            ]
+        )
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(mock_client, "_get_client") as mock_get_client:
+            mock_http = AsyncMock()
+            mock_http.put = AsyncMock(return_value=mock_response)
+            mock_get_client.return_value = mock_http
+
+            await mock_client.set_workflow_label("TEST-123", ForgeLabel.PRD_APPROVED)
+
+        operations = mock_http.put.call_args.kwargs["json"]["update"]["labels"]
+        assert {"remove": "forge:workflow:planning-smoke"} not in operations
+        assert {"remove": "forge:prd-pending"} in operations
 
 
 class TestJiraClientArchiveIssue:
@@ -440,6 +465,28 @@ class TestJiraClientErrorComments:
         assert "https://[REDACTED]@github.com/org/repo.git" in posted_text
 
 
+class TestJiraClientCommentLimit:
+    """Tests for Jira client comment length limits."""
+
+    @pytest.fixture
+    def mock_client(self):
+        """Create client with mocked settings."""
+        with patch("forge.integrations.jira.client.get_settings") as mock_settings:
+            mock_settings.return_value.jira_base_url = "https://test.atlassian.net"
+            mock_settings.return_value.jira_api_token = MagicMock()
+            mock_settings.return_value.jira_api_token.get_secret_value.return_value = "token"
+            mock_settings.return_value.jira_user_email = "test@example.com"
+
+            client = JiraClient()
+            return client
+
+    @pytest.mark.asyncio
+    async def test_add_comment_exceeds_limit_raises_value_error(self, mock_client):
+        """Should raise ValueError if the body exceeds 32767 characters in add_comment."""
+        huge_body = "a" * 32768
+        with pytest.raises(ValueError, match="exceeds maximum Jira limit of 32767"):
+            await mock_client.add_comment("TEST-123", huge_body)
+
 class TestJiraClientADF:
     """Tests for ADF conversion."""
 
@@ -452,6 +499,42 @@ class TestJiraClientADF:
         assert adf["type"] == "doc"
         assert adf["version"] == 1
         assert len(adf["content"]) >= 1
+
+    def test_text_to_adf_preserves_multiline_plan_steps(self):
+        """Single-newline plan steps remain readable Jira paragraphs."""
+        adf = JiraClient._text_to_adf("**Plan:**\nInspect the handler\nAdd regression coverage")
+
+        assert [node["type"] for node in adf["content"]] == [
+            "paragraph",
+            "paragraph",
+            "paragraph",
+        ]
+        assert adf["content"][0]["content"][0]["text"] == "Plan:"
+        assert adf["content"][1]["content"][0]["text"] == "Inspect the handler"
+        assert adf["content"][2]["content"][0]["text"] == "Add regression coverage"
+
+    def test_text_to_adf_keeps_tables_lists_and_code_structured(self):
+        """Line-break preservation must not split Markdown block structures."""
+        markdown = """| ID | Summary |
+|----|---------|
+| 1 | First |
+
+- one
+- two
+
+```python
+first_line()
+second_line()
+```"""
+
+        adf = JiraClient._text_to_adf(markdown)
+
+        assert [node["type"] for node in adf["content"]] == [
+            "table",
+            "bulletList",
+            "codeBlock",
+        ]
+        assert adf["content"][2]["content"][0]["text"] == "first_line()\nsecond_line()"
 
     def test_text_to_adf_heading(self):
         """Markdown heading converts to ADF heading."""
@@ -1006,3 +1089,35 @@ class TestJiraClientListProjectProperties:
 
             result = await jira_client.list_project_properties("MYPROJ")
             assert result == []
+
+
+class TestJiraClientSearchIssues:
+    @pytest.mark.asyncio
+    async def test_uses_enhanced_jql_search_and_token_pagination(self, jira_client):
+        first = MagicMock()
+        first.raise_for_status = MagicMock()
+        first.json.return_value = {
+            "issues": [{"id": "1", "key": "PROJ-1", "fields": {"summary": "First"}}],
+            "nextPageToken": "next-token",
+            "isLast": False,
+        }
+        second = MagicMock()
+        second.raise_for_status = MagicMock()
+        second.json.return_value = {
+            "issues": [{"id": "2", "key": "PROJ-2", "fields": {"summary": "Second"}}],
+            "isLast": True,
+        }
+        http = AsyncMock()
+        http.get = AsyncMock(side_effect=[first, second])
+
+        with patch.object(jira_client, "_get_client", return_value=http):
+            issues = await jira_client.search_issues(
+                'project = "PROJ"', fields=["summary", "labels"], max_results=None
+            )
+
+        assert [issue.key for issue in issues] == ["PROJ-1", "PROJ-2"]
+        first_call, second_call = http.get.await_args_list
+        assert first_call.args[0] == "/search/jql"
+        assert "nextPageToken" not in first_call.kwargs["params"]
+        assert second_call.args[0] == "/search/jql"
+        assert second_call.kwargs["params"]["nextPageToken"] == "next-token"

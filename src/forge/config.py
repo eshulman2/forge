@@ -83,7 +83,10 @@ class Settings(BaseSettings):
     # GitHub Configuration
     github_token: SecretStr = Field(description="GitHub personal access token")
     github_webhook_secret: SecretStr = Field(
-        default=SecretStr(""), description="Shared secret for GitHub webhook validation"
+        default=SecretStr(""),
+        description=(
+            "Shared secret for GitHub webhook validation; leave empty to accept unsigned webhooks"
+        ),
     )
     github_default_repo: str = Field(
         default="",
@@ -105,6 +108,14 @@ class Settings(BaseSettings):
     github_fork_owner: str = Field(
         default="",
         description="GitHub account/org where forks are created (defaults to authenticated user if empty)",
+    )
+    forge_repos_config_path: str = Field(
+        default="config/repos.yaml",
+        description=(
+            "Path to the source control provider/connection registry config file. "
+            "Optional — repositories not listed here resolve through the implicit "
+            "default GitHub connection built from GITHUB_TOKEN/GITHUB_WEBHOOK_SECRET."
+        ),
     )
     forge_bot_comment_prefix: str = Field(
         default="",
@@ -369,7 +380,7 @@ class Settings(BaseSettings):
             "allowed_models": list(dict.fromkeys([self.llm_model, self.container_model])),
             # Legacy Forge agents already rely on provider tool calling. This
             # implicit connection is not exposed to Jira project overrides.
-            "capabilities": ["tools"],
+            "capabilities": ["structured_output", "tools"],
         }
         if self.llm_backend == "vertex-ai":
             connection.update(
@@ -454,6 +465,10 @@ class Settings(BaseSettings):
     disable_openapi_docs: bool = Field(
         default=False,
         description="Disable /docs, /redoc, and /openapi.json endpoints",
+    )
+    forge_operator_token: SecretStr = Field(
+        default=SecretStr(""),
+        description="Bearer token required by workflow execution/operator APIs",
     )
 
     @property
@@ -626,6 +641,13 @@ class Settings(BaseSettings):
     worker_metrics_enabled: bool = Field(
         default=True,
         description="Enable Prometheus metrics endpoint in worker",
+    )
+    effect_operator_token: SecretStr | None = Field(
+        default=None,
+        description=(
+            "Bearer token for durable-effect inspection and replay endpoints. "
+            "The endpoints remain disabled when unset."
+        ),
     )
 
     # OpenTelemetry Configuration

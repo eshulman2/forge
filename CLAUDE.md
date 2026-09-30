@@ -123,11 +123,16 @@ podman rm $(podman ps -a --filter name=forge- -q)
 
 ## Jira Comment Syntax
 
-| Prefix | Effect |
-|--------|--------|
-| `!` | Revision request — triggers regeneration with feedback |
+| Prefix / Command | Effect |
+|------------------|--------|
+| `!` | Revision request — triggers regeneration/revision with feedback |
 | `?` or `@forge ask` | Question — triggers Q&A answer |
 | `>option N` | RCA option selection (RCA Option Gate only) |
+| `/forge approve` | Approve draft (Epic plan or Tasks) to provision tickets |
+| `/forge remove ID` | Remove proposed draft item by ID and re-sequence |
+| `/forge exclude ID` | Toggle exclusion of proposed draft item by ID |
+| `/forge update ID key=val` | Update fields (`summary`, `description`, `repo`) of proposed draft item |
+| `/forge add key=val` | Add a new proposed item to draft |
 | _(no prefix)_ | Informational — workflow ignores it |
 
 ## GitHub PR Comment Commands
@@ -138,7 +143,12 @@ podman rm $(podman ps -a --filter name=forge- -q)
 | `/forge unskip-gate <name>` | PR comment | Remove a previously set skip |
 | `/forge rebase` | PR comment | Merge main into PR branch, resolving conflicts with AI |
 
-Skip-gate commands are only active at CI stages (`wait_for_ci_gate`, `ci_evaluator`, `attempt_ci_fix`). Rebase works from any workflow stage.
+Skip-gate commands are only active at CI stages (`ci_evaluator`, `attempt_ci_fix`, `human_review_gate`). Rebase works from any workflow stage.
+
+## Source Control Registry (repos.yaml)
+
+`load_registry()` parses the optional `repos.yaml`-shaped config referenced by `settings.forge_repos_config_path`, resolving repository identifiers to connections and adapters. `get_registry()` caches the result for the life of the process (`@lru_cache`) — editing `repos.yaml` requires a **process restart** to take effect; there is no runtime reload. A misconfigured `repos.yaml` (unknown provider, missing `credential_env`, etc.) fails app startup rather than the first inbound webhook.
+
 
 ## PRD & Spec Approval via GitHub PR
 

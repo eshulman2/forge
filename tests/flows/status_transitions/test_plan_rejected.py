@@ -1,11 +1,10 @@
 """Tests for Plan rejection and revision cycles."""
 
-
 import pytest
 
 from forge.models.workflow import TicketType
-from forge.workflow.gates import route_plan_approval
 from forge.workflow.feature.state import create_initial_feature_state as create_initial_state
+from forge.workflow.gates import route_plan_approval
 
 
 class TestPlanRejectedFullRegen:
@@ -143,7 +142,7 @@ class TestPlanPartialApproval:
 
         result = route_plan_approval(plan_partial_approval)
 
-        assert result == "generate_tasks"
+        assert result == "provision_epics"
 
 
 class TestPlanRejectedBackToSpec:

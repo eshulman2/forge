@@ -33,7 +33,7 @@ native credential environment variables.
     ```bash
     GOOGLE_CLOUD_PROJECT=your-gcp-project
     GOOGLE_CLOUD_LOCATION=global
-    MODEL_CONNECTIONS={"vertex-prod":{"backend":"vertex-ai","project":"your-gcp-project","location":"global","allowed_models":["gemini-3.5-flash"],"capabilities":["tools"]}}
+    MODEL_CONNECTIONS={"vertex-prod":{"backend":"vertex-ai","project":"your-gcp-project","location":"global","allowed_models":["gemini-3.5-flash"],"capabilities":["structured_output","tools"]}}
     MODEL_DEFAULT={"connection":"vertex-prod","model":"gemini-3.5-flash"}
     ```
 
@@ -41,7 +41,7 @@ native credential environment variables.
 
     ```bash
     GOOGLE_API_KEY=your-google-api-key
-    MODEL_CONNECTIONS={"gemini-api":{"backend":"google-genai","allowed_models":["gemini-3.5-flash"],"capabilities":["tools"]}}
+    MODEL_CONNECTIONS={"gemini-api":{"backend":"google-genai","allowed_models":["gemini-3.5-flash"],"capabilities":["structured_output","tools"]}}
     MODEL_DEFAULT={"connection":"gemini-api","model":"gemini-3.5-flash"}
     ```
 
@@ -49,7 +49,7 @@ native credential environment variables.
 
     ```bash
     ANTHROPIC_API_KEY=your-anthropic-api-key
-    MODEL_CONNECTIONS={"anthropic-prod":{"backend":"anthropic","allowed_models":["claude-sonnet-4-6"],"capabilities":["tools"]}}
+    MODEL_CONNECTIONS={"anthropic-prod":{"backend":"anthropic","allowed_models":["claude-sonnet-4-6"],"capabilities":["structured_output","tools"]}}
     MODEL_DEFAULT={"connection":"anthropic-prod","model":"claude-sonnet-4-6"}
     ```
 
@@ -94,7 +94,7 @@ recommended connection configuration. Jira projects can then set
 `forge.model_policy`, restricted to those connections and models:
 
 ```bash
-MODEL_CONNECTIONS={"vertex-global":{"backend":"vertex-ai","project":"my-gcp-project","location":"global","allowed_models":["gemini-3.5-flash","claude-sonnet-5"],"capabilities":["tools"]}}
+MODEL_CONNECTIONS={"vertex-global":{"backend":"vertex-ai","project":"my-gcp-project","location":"global","allowed_models":["gemini-3.5-flash","claude-sonnet-5"],"capabilities":["structured_output","tools"]}}
 MODEL_DEFAULT={"connection":"vertex-global","model":"gemini-3.5-flash"}
 MODEL_POLICY={"generate_prd":{"connection":"vertex-global","model":"claude-sonnet-5"},"generate_spec":{"connection":"vertex-global","model":"gemini-3.5-flash"}}
 ```
@@ -102,7 +102,7 @@ MODEL_POLICY={"generate_prd":{"connection":"vertex-global","model":"claude-sonne
 ```bash
 forge project-setup MYPROJ \
   --model generate_prd=vertex-production:gemini-3.5-pro \
-  --model implement_task=anthropic-production:claude-sonnet-4-6
+  --model implement_work=anthropic-production:claude-sonnet-4-6
 
 # Set a separate project-wide fallback (individual --model overrides still win)
 forge project-setup MYPROJ \
@@ -145,14 +145,12 @@ graph-node names are not accepted in Jira configuration:
 | `proposal_review_triage` | Classification of proposal review threads |
 | `task_takeover_triage` | Existing-task takeover triage |
 | `task_takeover_planning` | Existing-task implementation planning |
-| `task_takeover_execution` | Existing-task container implementation |
+| `implement_work` | Container implementation for feature, bug, and task-takeover workflows |
 | `task_takeover_review` | Existing-task qualitative review |
 | `task_takeover_question` | Questions about task-takeover artifacts |
 | `analyze_bug` | Root-cause analysis |
 | `reflect_rca` | Root-cause analysis reflection |
 | `plan_bug_fix` | Bug-fix planning |
-| `implement_bug_fix` | Bug-fix container implementation |
-| `implement_task` | Feature-task container implementation |
 | `bug_local_review` | Local qualitative review of a bug fix |
 | `local_code_review` | Local feature code review |
 | `code_review` | Pull-request code review |
@@ -246,6 +244,16 @@ global stage mapping, then the global default, and finally the legacy
 |----------|---------|-------------|
 | `REDIS_URL` | `redis://localhost:6380/0` | Redis connection URL |
 
+### Operator APIs
+
+| Variable | Description |
+| --- | --- |
+| `FORGE_OPERATOR_TOKEN` | Bearer token required for execution and Org Pulse read APIs. The routes are disabled when it is empty. |
+| `EFFECT_OPERATOR_TOKEN` | Bearer token required for durable-effect inspection and replay APIs. The routes are disabled when it is unset. |
+
+Use distinct values when different operators should have workflow-read versus
+effect-replay authority. See [operations](../operations.md) for recovery rules.
+
 ## Per-Project Repository Configuration
 
 !!! warning "Production requirement"
@@ -281,6 +289,54 @@ curl -X PUT \
   -u "you@example.com:YOUR_API_TOKEN" \
   -d '"org/repo1"'
 ```
+
+Repository labels on managed tickets use `repo:<owner>/<repo>`. Forge validates
+that assignment against the project's configured repositories before workspace
+setup or implementation. A missing or invalid assignment blocks the workflow
+instead of selecting a repository implicitly.
+
+If the deployment uses `FORGE_REPOS_CONFIG_PATH` to load a `repos.yaml`
+registry, the process caches that registry for its lifetime. Restart the gateway
+and every worker after changing the file. See [operations](../operations.md)
+for the safe deployment and recovery model.
+
+GitLab repositories use explicit connections (there is no implicit GitLab
+default), which supports both GitLab.com and self-managed instances:
+
+Set `base_url` to either the GitLab host/root URL (including any self-managed
+path prefix) or an explicit REST API v4 URL. Forge normalizes host/root URLs
+by appending `/api/v4`; explicit URLs ending in `/api/v4` are accepted as-is.
+
+```yaml
+connections:
+  engineering-gitlab:
+    provider: gitlab
+    base_url: https://gitlab.example.com
+    credential_env: ENGINEERING_GITLAB_TOKEN
+    webhook_secret_env: ENGINEERING_GITLAB_WEBHOOK_SECRET
+repositories:
+  payments-api:
+    provider: gitlab
+    connection: engineering-gitlab
+    namespace: platform/payments-api
+    default_branch: main
+    change_request_mode: direct
+```
+
+## Proposal review configuration
+
+Projects can opt into GitHub pull-request review for PRDs and specifications.
+Set `forge.prd_proposals_repo` to an `owner/repo` repository and optionally set
+`forge.prd_proposals_path` to a base directory. Forge then creates `prd.md` and
+`design.md` under `{path}/{TICKET}/` on separate proposal branches; merge is
+approval and review feedback requests regeneration.
+
+Use `forge project-setup MYPROJ --prd-proposals-repo owner/repo` to configure
+the repository and `--prd-proposals-path path` to configure the base path. Set
+either option to an empty value to remove/reset it. When project configuration
+is not required, `PRD_PROPOSALS_REPO` and `PRD_PROPOSALS_PATH` provide global
+fallbacks. See [proposal review](proposals.md) for the distinction between this
+workflow behavior and core-project design proposals.
 
 ## Local Development Overrides
 

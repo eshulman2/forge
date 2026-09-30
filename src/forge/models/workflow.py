@@ -132,6 +132,7 @@ class ForgeLabel(StrEnum):
     BLOCKED = "forge:blocked"
     RETRY = "forge:retry"  # Add to trigger retry of current stage
     YOLO = "forge:yolo"  # Skip human approval gates — auto-approve all artifact reviews
+    DIRECT_MODE = "forge:direct-mode"
 
 
 class TicketType(StrEnum):

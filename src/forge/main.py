@@ -9,10 +9,22 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+import forge.integrations.source_control.github  # noqa: F401  (registers GitHub adapter factory)
+import forge.integrations.source_control.gitlab  # noqa: F401  (registers GitLab adapter factory)
 from forge import __version__
 from forge.api.middleware.correlation import CorrelationIdMiddleware
-from forge.api.routes import github_router, health_router, jira_router, metrics_router
+from forge.api.routes import (
+    effects_router,
+    executions_router,
+    github_router,
+    gitlab_router,
+    health_router,
+    jira_router,
+    metrics_router,
+    org_pulse_router,
+)
 from forge.config import get_settings
+from forge.integrations.source_control.registry import get_registry
 from forge.observability.config import configure_tracing, shutdown_tracing
 from forge.orchestrator.checkpointer import close_redis_pool
 
@@ -34,6 +46,11 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
 
     log_startup_banner("API Gateway")
 
+    # Load the source-control registry now so a misconfigured repos.yaml
+    # (unknown provider, missing credential_env, etc.) fails startup instead
+    # of surfacing as a 500 on the first inbound webhook.
+    registry = get_registry()
+
     # Startup - initialize tracing
     if settings.tracing_enabled:
         configure_tracing(
@@ -48,6 +65,7 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Shutting down Forge...")
     if settings.tracing_enabled:
         await shutdown_tracing()
+    await registry.aclose()
     await close_redis_pool()
 
 
@@ -109,6 +127,10 @@ All webhook endpoints verify signatures:
                 "name": "github",
                 "description": "GitHub webhook endpoints",
             },
+            {
+                "name": "gitlab",
+                "description": "GitLab webhook endpoints",
+            },
         ],
         docs_url=None if settings.disable_openapi_docs else "/docs",
         redoc_url=None if settings.disable_openapi_docs else "/redoc",
@@ -130,8 +152,12 @@ All webhook endpoints verify signatures:
     # Register routes
     app.include_router(health_router)
     app.include_router(metrics_router)
+    app.include_router(effects_router)
     app.include_router(jira_router)
     app.include_router(github_router)
+    app.include_router(gitlab_router)
+    app.include_router(executions_router)
+    app.include_router(org_pulse_router)
 
     return app
 

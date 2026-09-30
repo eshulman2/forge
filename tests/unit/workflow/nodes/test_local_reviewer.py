@@ -38,6 +38,8 @@ def base_bug_review_state():
         "context": {"branch_name": "fix/BUG-42"},
         "retry_count": 0,
         "last_error": None,
+        "fork_owner": "forge-bot",
+        "fork_repo": "backend",
     }
 
 
@@ -55,6 +57,8 @@ def base_feature_review_state():
         "context": {"branch_name": "feat/FEAT-10"},
         "retry_count": 0,
         "last_error": None,
+        "fork_owner": "forge-bot",
+        "fork_repo": "backend",
     }
 
 
@@ -161,6 +165,8 @@ class TestLocalReviewBug:
         desc = captured_desc[0]
         # Bug-specific context should be in description
         assert "Password validator" in desc or "Fix regex" in desc or "validators.py" in desc
+        assert "Current repository: `acme/backend`" in desc
+        assert "do not reject this repository's changes" in desc
 
     @pytest.mark.asyncio
     async def test_adequate_verdict_routes_to_create_pr(self, base_bug_review_state):
@@ -230,7 +236,7 @@ class TestLocalReviewBug:
         ):
             result = await local_review_changes(base_bug_review_state)
 
-        assert result["current_node"] == "implement_bug_fix"
+        assert result["current_node"] == "implement_work"
         assert result["qualitative_retry_count"] == 1
         assert result["local_review_verdict"] == "tests_incomplete"
         assert "Tests do not fail" in (result["qualitative_feedback"] or "")
@@ -247,7 +253,7 @@ class TestLocalReviewBug:
         ):
             result = await local_review_changes(base_bug_review_state)
 
-        assert result["current_node"] == "implement_bug_fix"
+        assert result["current_node"] == "implement_work"
         assert result["qualitative_retry_count"] == 1
 
     @pytest.mark.asyncio
@@ -374,6 +380,8 @@ class TestLocalReviewFeature:
 
         assert result["current_node"] == "create_pr"
         assert result.get("local_review_verdict") is None
+        assert "Current repository: `acme/backend`" in captured_desc[0]
+        assert "another repository's work is absent" in captured_desc[0]
         mock_git.push_to_fork.assert_called_once()
 
     @pytest.mark.asyncio

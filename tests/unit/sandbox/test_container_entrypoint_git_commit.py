@@ -7,6 +7,11 @@ from pathlib import Path
 
 def _load_entrypoint_module():
     module_path = Path(__file__).parents[3] / "containers" / "entrypoint.py"
+    import sys
+
+    containers_dir = str(module_path.parent)
+    if containers_dir not in sys.path:
+        sys.path.insert(0, containers_dir)
     spec = importlib.util.spec_from_file_location("forge_container_entrypoint", module_path)
     assert spec is not None
     module = importlib.util.module_from_spec(spec)

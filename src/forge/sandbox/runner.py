@@ -440,7 +440,10 @@ class ContainerRunner:
                 )
 
         for host_path, container_path in skill_mounts:
-            mounts.append((host_path, container_path, "ro,Z"))
+            # Skill trees are shared by concurrent sandbox containers. A private
+            # SELinux label (``Z``) lets a later mount revoke an already-running
+            # container's access; ``z`` labels this read-only mount as shared.
+            mounts.append((host_path, container_path, "ro,z"))
 
         return mounts
 
@@ -591,7 +594,7 @@ class ContainerRunner:
         task_key: str,
         skill_name: str,
         collected_cycles: list[ReviewCycleData],
-    ) -> tuple[ReviewCyclePoller | None, ReviewCycleRecorder | None, asyncio.Task | None]:
+    ) -> tuple[ReviewCyclePoller | None, ReviewCycleRecorder | None, asyncio.Task[Any] | None]:
         """Create review poller, recorder, and start background polling task.
 
         Args:
@@ -664,7 +667,7 @@ class ContainerRunner:
         self,
         poller: ReviewCyclePoller | None,
         recorder: ReviewCycleRecorder | None,
-        polling_task: asyncio.Task | None,
+        polling_task: asyncio.Task[Any] | None,
         workspace_path: Path,
         step_name: str | None,
         task_key: str,
@@ -882,7 +885,7 @@ class ContainerRunner:
         collected_cycles: list[ReviewCycleData] = []
         poller: ReviewCyclePoller | None = None
         recorder: ReviewCycleRecorder | None = None
-        polling_task: asyncio.Task | None = None
+        polling_task: asyncio.Task[Any] | None = None
 
         try:
             # Build container name and execution spec

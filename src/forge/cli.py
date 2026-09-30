@@ -6,6 +6,8 @@ import logging
 import sys
 from typing import Any
 
+import forge.integrations.source_control.github  # noqa: F401  (registers GitHub adapter factory)
+import forge.integrations.source_control.gitlab  # noqa: F401  (registers GitLab adapter factory)
 from forge.config import get_settings
 
 
@@ -30,7 +32,14 @@ async def _get_compiled_workflow_for_ticket(ticket_key: str):
     from forge.integrations.jira.client import JiraClient
     from forge.models.workflow import TicketType
     from forge.orchestrator.checkpointer import get_checkpointer
+    from forge.workflow.declarative.resolver import (
+        load_project_workflow,
+        selected_workflow_name,
+    )
+    from forge.workflow.declarative.workflow import DeclarativeWorkflow
     from forge.workflow.registry import create_default_router
+
+    checkpointer = await get_checkpointer()
 
     # Fetch ticket to determine type
     jira = JiraClient()
@@ -41,24 +50,51 @@ async def _get_compiled_workflow_for_ticket(ticket_key: str):
             ticket_type = TicketType(ticket_type_str)
         except ValueError:
             ticket_type = TicketType.FEATURE  # Default for unknown types
+        config = {"configurable": {"thread_id": ticket_key}}
+        raw_checkpoint = await checkpointer.aget(config)
+        values = raw_checkpoint.get("channel_values", {}) if raw_checkpoint else {}
+        workflow_name = values.get("workflow_name") or selected_workflow_name(issue.labels)
+        if workflow_name:
+            project_key = values.get("workflow_project_key") or issue.project_key
+            workflow_instance = await load_project_workflow(
+                jira,
+                project_key or ticket_key.split("-", 1)[0],
+                workflow_name,
+                pinned_revision=values.get(
+                    "workflow_definition_revision", values.get("workflow_revision")
+                ),
+                pinned_digest=values.get(
+                    "workflow_definition_digest", values.get("workflow_digest")
+                ),
+                pinned_definition=values.get("workflow_definition"),
+            )
+        else:
+            workflow_instance = None
     finally:
         await jira.close()
 
     # Resolve workflow
-    router = create_default_router()
-    workflow_instance = router.resolve(
-        ticket_type=ticket_type,
-        labels=[],
-        event={},
-    )
+    if workflow_instance is None:
+        router = create_default_router()
+        workflow_instance = router.resolve(
+            ticket_type=ticket_type,
+            labels=issue.labels,
+            event={},
+        )
 
     if workflow_instance is None:
         raise ValueError(f"No workflow found for ticket type: {ticket_type}")
 
     # Build and compile
-    checkpointer = await get_checkpointer()
     graph = workflow_instance.build_graph()
     compiled_workflow = graph.compile(checkpointer=checkpointer)
+
+    if isinstance(workflow_instance, DeclarativeWorkflow):
+        state = await compiled_workflow.aget_state(config)
+        if state and state.values:
+            migrated = workflow_instance.migrate_state(dict(state.values))
+            if migrated != state.values:
+                await compiled_workflow.aupdate_state(config, migrated)
 
     return compiled_workflow, checkpointer
 
@@ -568,7 +604,17 @@ async def cmd_project_setup(args: argparse.Namespace) -> int:
             print(f"[OK] forge.repos = {parsed_repos}")
 
         # forge.default_repo
-        if args.default_repo:
+        remove_default_repo = getattr(args, "remove_default_repo", False)
+        if remove_default_repo and args.default_repo:
+            print(
+                "Error: --remove-default-repo cannot be combined with --default-repo",
+                file=sys.stderr,
+            )
+            return 1
+        if remove_default_repo:
+            await jira.delete_project_property(project_key, "forge.default_repo")
+            print("[OK] forge.default_repo removed")
+        elif args.default_repo:
             if "/" not in args.default_repo:
                 print(
                     f"Error: --default-repo must be owner/repo, got: {args.default_repo!r}",
@@ -862,6 +908,7 @@ async def cmd_project_setup(args: argparse.Namespace) -> int:
                 add_repos,
                 remove_repos,
                 args.default_repo,
+                remove_default_repo,
                 args.prd_proposals_repo is not None,
                 args.prd_proposals_path is not None,
                 args.skills_config,
@@ -882,7 +929,7 @@ async def cmd_project_setup(args: argparse.Namespace) -> int:
         ):
             print(
                 "Nothing to set — specify at least one of: "
-                "--repo, --add-repo, --remove-repo, --default-repo, "
+                "--repo, --add-repo, --remove-repo, --default-repo, --remove-default-repo, "
                 "--prd-proposals-repo, --remove-prd-proposals-repo, "
                 "--prd-proposals-path, --remove-prd-proposals-path, "
                 "--skills-config, --add-skill, --remove-skills"
@@ -1020,10 +1067,10 @@ async def cmd_get_config(args: argparse.Namespace) -> int:
                 val = settings.github_default_repo or None
                 effective_config["forge.default_repo"] = {
                     "value": val,
-                    "source": "global" if val else "unset/required",
+                    "source": "global" if val else "unset",
                 }
             else:
-                effective_config["forge.default_repo"] = {"value": None, "source": "unset/required"}
+                effective_config["forge.default_repo"] = {"value": None, "source": "unset"}
 
         # 3. forge.prd_proposals_repo
         prd_repo_val = project_properties.get("forge.prd_proposals_repo")
@@ -1037,12 +1084,12 @@ async def cmd_get_config(args: argparse.Namespace) -> int:
                 val = settings.prd_proposals_repo or None
                 effective_config["forge.prd_proposals_repo"] = {
                     "value": val,
-                    "source": "global" if val else "unset/required",
+                    "source": "global" if val else "unset",
                 }
             else:
                 effective_config["forge.prd_proposals_repo"] = {
                     "value": None,
-                    "source": "unset/required",
+                    "source": "unset",
                 }
 
         # 4. forge.prd_proposals_path
@@ -1666,6 +1713,95 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
 
+    # Declarative workflow management. YAML is a local authoring format;
+    # Jira stores the validated canonical JSON representation.
+    workflow_parser = subparsers.add_parser(
+        "workflow", help="Validate and manage project-scoped workflows"
+    )
+    workflow_subparsers = workflow_parser.add_subparsers(dest="workflow_command")
+
+    workflow_validate = workflow_subparsers.add_parser("validate", help="Validate a YAML file")
+    workflow_validate.add_argument("file")
+    workflow_validate.add_argument("--json", action="store_true", help="Print canonical JSON")
+
+    workflow_render = workflow_subparsers.add_parser(
+        "render", help="Render a validated workflow process manifest"
+    )
+    workflow_render.add_argument("file")
+    workflow_render.add_argument("--format", choices=("mermaid", "json"), default="mermaid")
+
+    workflow_diff = workflow_subparsers.add_parser(
+        "diff", help="Report structural and in-flight impact between revisions"
+    )
+    workflow_diff.add_argument("previous")
+    workflow_diff.add_argument("current")
+
+    workflow_simulate = workflow_subparsers.add_parser(
+        "simulate-migration",
+        help="Dry-run a definition change against active instance snapshots",
+    )
+    workflow_simulate.add_argument("previous")
+    workflow_simulate.add_argument("current")
+    workflow_simulate.add_argument("instances", help="JSON array of active checkpoint snapshots")
+
+    workflow_catalog = workflow_subparsers.add_parser(
+        "catalog", help="Show registered nodes, routers, contracts, and effect authority"
+    )
+    workflow_catalog.add_argument("state", choices=("feature", "bug", "task_takeover"))
+    workflow_catalog.add_argument("--json", action="store_true")
+
+    workflow_publish = workflow_subparsers.add_parser("publish", help="Publish a YAML workflow")
+    workflow_publish.add_argument("project_key")
+    workflow_publish.add_argument("file")
+    workflow_publish.add_argument("--actor", default="forge-cli")
+    workflow_publish.add_argument("--reason", default="CLI publication")
+
+    workflow_activate = workflow_subparsers.add_parser(
+        "activate", help="Activate an already-published workflow revision"
+    )
+    workflow_activate.add_argument("project_key")
+    workflow_activate.add_argument("name")
+    workflow_activate.add_argument("revision", type=int)
+    workflow_activate.add_argument("--actor", default="forge-cli")
+    workflow_activate.add_argument("--reason", default="CLI activation")
+    workflow_activate.add_argument(
+        "--expected-active-digest",
+        help="Fail if the active definition digest has changed since it was read",
+    )
+
+    workflow_rollback = workflow_subparsers.add_parser(
+        "rollback", help="Activate a previously published compatible revision"
+    )
+    workflow_rollback.add_argument("project_key")
+    workflow_rollback.add_argument("name")
+    workflow_rollback.add_argument("revision", type=int)
+    workflow_rollback.add_argument("--actor", default="forge-cli")
+    workflow_rollback.add_argument("--reason", default="CLI rollback")
+    workflow_rollback.add_argument(
+        "--expected-active-digest",
+        help="Fail if the active definition digest has changed since it was read",
+    )
+
+    workflow_show = workflow_subparsers.add_parser("show", help="Show one project workflow")
+    workflow_show.add_argument("project_key")
+    workflow_show.add_argument("name")
+    workflow_show.add_argument("--json", action="store_true")
+
+    workflow_list = workflow_subparsers.add_parser("list", help="List project workflows")
+    workflow_list.add_argument("project_key")
+
+    workflow_history = workflow_subparsers.add_parser(
+        "show-history", help="Show immutable publication and rollout audit history"
+    )
+    workflow_history.add_argument("project_key")
+    workflow_history.add_argument("name")
+    workflow_history.add_argument("--json", action="store_true")
+
+    workflow_delete = workflow_subparsers.add_parser("delete", help="Delete a project workflow")
+    workflow_delete.add_argument("project_key")
+    workflow_delete.add_argument("name")
+    workflow_delete.add_argument("--yes", action="store_true", help="Confirm deletion")
+
     # project-setup command
     setup_parser = subparsers.add_parser(
         "project-setup",
@@ -1715,6 +1851,11 @@ Examples:
         "--default-repo",
         metavar="OWNER/REPO",
         help="Primary GitHub repo (sets forge.default_repo)",
+    )
+    setup_parser.add_argument(
+        "--remove-default-repo",
+        action="store_true",
+        help="Remove the forge.default_repo project property",
     )
     setup_parser.add_argument(
         "--prd-proposals-repo",
@@ -1902,6 +2043,14 @@ Examples:
             return asyncio.run(skills_handler(args))
         skills_parser.print_help()
         return 0
+
+    if args.command == "workflow":
+        if getattr(args, "workflow_command", None) is None:
+            workflow_parser.print_help()
+            return 0
+        from forge.workflow.declarative.cli import cmd_workflow
+
+        return asyncio.run(cmd_workflow(args))
 
     # Map commands to async handlers
     handlers = {

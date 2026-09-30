@@ -39,6 +39,19 @@ class TestRouteHumanReview:
         }
         assert route_human_review(state) == "ci_evaluator"
 
+    def test_pr_merged_takes_priority_over_pending_ci_event(self):
+        """A merge takes priority even when pending_ci_event is also set —
+        route_human_review must not send an already-merged PR through
+        ci_evaluator just because a stale/racing CI event is pending."""
+        from forge.workflow.nodes.human_review import route_human_review
+
+        state = {
+            **BASE_STATE,
+            "pending_ci_event": True,
+            "pr_merged": True,
+        }
+        assert route_human_review(state) == "complete_tasks"
+
     def test_no_ci_event_paused_returns_end(self):
         """With no pending CI event, paused=True returns END."""
         from forge.workflow.nodes.human_review import route_human_review
@@ -69,53 +82,51 @@ class TestRouteHumanReview:
 
 class TestHumanReviewGate:
     @pytest.mark.asyncio
-    @patch("forge.workflow.nodes.human_review.remove_implementing_label", new_callable=AsyncMock)
-    @patch("forge.workflow.nodes.human_review.set_ci_pending_label", new_callable=AsyncMock)
-    @patch("forge.workflow.nodes.human_review.post_status_comment", new_callable=AsyncMock)
-    @patch("forge.workflow.nodes.human_review.JiraClient")
-    async def test_initial_entry_posts_comment_and_updates_labels(
-        self, MockJira, mock_post, mock_set_label, mock_remove_label
-    ):
+    @patch(
+        "forge.workflow.nodes.human_review.execute_persistence_actions",
+        new_callable=AsyncMock,
+    )
+    async def test_initial_entry_posts_comment_and_updates_labels(self, persist):
         """On initial entry (ci_status=None), gate posts comment and updates labels."""
         from forge.workflow.nodes.human_review import human_review_gate
-
-        mock_jira = AsyncMock()
-        MockJira.return_value = mock_jira
-        mock_jira.close = AsyncMock()
 
         state = {**BASE_STATE, "ci_status": None, "pending_ci_event": False}
         result = await human_review_gate(state)
 
-        mock_post.assert_called_once()
-        comment_text = mock_post.call_args[0][2]
+        persist.assert_awaited_once()
+        actions = persist.await_args.args[1]
+        comment_text = actions[0].payload["body"]
         assert "42" in comment_text  # PR number in comment
-        mock_remove_label.assert_called_once()
-        mock_set_label.assert_called_once()
+        assert [action.operation for action in actions] == [
+            "jira.comment.create",
+            "jira.labels.remove",
+            "jira.label.set",
+        ]
         assert result["is_paused"] is True
         assert result["current_node"] == "human_review_gate"
         assert result["pr_created_comment_posted"] is True
 
     @pytest.mark.asyncio
-    @patch("forge.workflow.nodes.human_review.post_status_comment", new_callable=AsyncMock)
-    @patch("forge.workflow.nodes.human_review.JiraClient")
-    async def test_subsequent_entry_skips_comment(self, MockJira, mock_post):
+    @patch(
+        "forge.workflow.nodes.human_review.execute_persistence_actions",
+        new_callable=AsyncMock,
+    )
+    async def test_subsequent_entry_skips_comment(self, persist):
         """On re-entry (ci_status already set), gate skips Jira comment."""
         from forge.workflow.nodes.human_review import human_review_gate
-
-        mock_jira = AsyncMock()
-        MockJira.return_value = mock_jira
-        mock_jira.close = AsyncMock()
 
         state = {**BASE_STATE, "ci_status": "pending", "pending_ci_event": False}
         result = await human_review_gate(state)
 
-        mock_post.assert_not_called()
+        persist.assert_not_awaited()
         assert result["is_paused"] is True
 
     @pytest.mark.asyncio
-    @patch("forge.workflow.nodes.human_review.post_status_comment", new_callable=AsyncMock)
-    @patch("forge.workflow.nodes.human_review.JiraClient")
-    async def test_first_ci_webhook_reentry_does_not_repost_comment(self, MockJira, mock_post):
+    @patch(
+        "forge.workflow.nodes.human_review.execute_persistence_actions",
+        new_callable=AsyncMock,
+    )
+    async def test_first_ci_webhook_reentry_does_not_repost_comment(self, persist):
         """The first CI webhook re-enters the gate while ci_status is still None.
 
         ci_evaluator has not run yet, so the guard must rely on
@@ -123,10 +134,6 @@ class TestHumanReviewGate:
         'Pull request created' Jira comment.
         """
         from forge.workflow.nodes.human_review import human_review_gate
-
-        mock_jira = AsyncMock()
-        MockJira.return_value = mock_jira
-        mock_jira.close = AsyncMock()
 
         state = {
             **BASE_STATE,
@@ -136,5 +143,5 @@ class TestHumanReviewGate:
         }
         result = await human_review_gate(state)
 
-        mock_post.assert_not_called()
+        persist.assert_not_awaited()
         assert result["is_paused"] is True

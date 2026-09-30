@@ -7,6 +7,7 @@ from typing import cast
 from forge.config import get_settings
 from forge.integrations.jira.client import JiraClient
 from forge.sandbox.runner import ContainerRunner
+from forge.workflow.nodes.repository_scope import review_repository_scope
 from forge.workflow.nodes.review_utils import (
     collect_git_diff,
     next_review_attempt,
@@ -16,6 +17,7 @@ from forge.workflow.nodes.review_utils import (
 from forge.workflow.nodes.workspace_setup import prepare_workspace
 from forge.workflow.task_takeover.state import TaskTakeoverState as WorkflowState
 from forge.workflow.utils import merge_review_exhaustion, update_state_timestamp
+from forge.workflow.utils.source_control import get_adapter
 from forge.workspace.git_ops import GitOperations
 from forge.workspace.manager import Workspace
 
@@ -69,7 +71,7 @@ async def run_qualitative_review(state: WorkflowState) -> WorkflowState:
         # A workflow can resume on a different worker from the one that ran
         # implementation.  Never trust the checkpointed local path: recover
         # the branch from the fork when that path is not visible here.
-        workspace_path, _ = prepare_workspace(state)
+        workspace_path, _ = await prepare_workspace(state)
         state = {**state, "workspace_path": workspace_path}
 
         # Fetch ticket details from Jira
@@ -78,13 +80,15 @@ async def run_qualitative_review(state: WorkflowState) -> WorkflowState:
         acceptance_criteria = _extract_acceptance_criteria(description)
 
         # Initialize GitOperations to retrieve git diff
+        repo_ref, adapter = get_adapter(current_repo)
         git = GitOperations(
             Workspace(
                 path=Path(workspace_path),
                 repo_name=current_repo,
                 branch_name=state.get("context", {}).get("branch_name", ""),
                 ticket_key=ticket_key,
-            )
+            ),
+            await adapter.get_git_credentials(repo_ref),
         )
         git_diff = collect_git_diff(git)
 
@@ -98,12 +102,7 @@ async def run_qualitative_review(state: WorkflowState) -> WorkflowState:
             workspace_path=workspace_path,
         )
         prompt_content = (
-            "## Repository Review Scope\n"
-            f"Current repository: `{current_repo}`\n"
-            "Review only requirements and changes belonging to this repository. Do not "
-            "reject this repository's work because plan steps assigned to other repositories "
-            "are absent; those are implemented and reviewed separately.\n\n"
-            f"{prompt_content}"
+            review_repository_scope(current_repo, workspace_path) + "\n\n" + prompt_content
         )
 
         runner = ContainerRunner(settings)

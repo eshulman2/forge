@@ -6,15 +6,27 @@ from typing import cast
 
 from forge.config import get_settings
 from forge.integrations.jira.client import JiraClient
+from forge.prompts import load_prompt
 from forge.sandbox.runner import ContainerRunner
+from forge.workflow.nodes.execution_engine import (
+    ExecutionArtifact,
+    ExecutionPersistenceError,
+    ExecutionRequest,
+    build_execution_prompt,
+    run_and_persist_execution,
+)
 from forge.workflow.nodes.git_persistence import (
     PushPersistenceError,
     build_persistence_error_state,
     push_to_fork_with_retry,
+    use_fork_remote,
 )
 from forge.workflow.nodes.workspace_setup import prepare_workspace
+from forge.workflow.projections.implementation_input import project_implementation_input
+from forge.workflow.reducers.implementation_input import reduce_implementation_input
+from forge.workflow.stations.runner import invoke_builtin_station
 from forge.workflow.task_takeover.state import TaskTakeoverState
-from forge.workflow.utils import merge_review_exhaustion, update_state_timestamp
+from forge.workflow.utils import update_state_timestamp
 from forge.workflow.utils.references import fetch_and_inject_references
 from forge.workspace.handoff import capture_handoff
 
@@ -31,7 +43,7 @@ async def execute_task_changes(state: TaskTakeoverState) -> TaskTakeoverState:
         Updated TaskTakeoverState.
     """
     ticket_key = state["ticket_key"]
-    current_repo = state.get("current_repo", "")
+    current_repo = state.get("current_repository") or state.get("current_repo") or ""
     current_task = state.get("current_task_key") or ticket_key
     container_started = False
     recorded_workspace = state.get("workspace_path")
@@ -44,7 +56,7 @@ async def execute_task_changes(state: TaskTakeoverState) -> TaskTakeoverState:
         # Resume safely when another worker cannot see the checkpointed local
         # workspace.  The implementation branch is persisted to the fork
         # below so a newly cloned workspace contains the reviewed changes.
-        workspace_path, git = prepare_workspace(state)
+        workspace_path, git = await prepare_workspace(state)
         state = {**state, "workspace_path": workspace_path}
 
         same_workspace_survived = (
@@ -54,13 +66,13 @@ async def execute_task_changes(state: TaskTakeoverState) -> TaskTakeoverState:
         )
         if state.get("implementation_push_pending") and same_workspace_survived:
             try:
-                await push_to_fork_with_retry(git)
+                await push_to_fork_with_retry(git, use_fork=use_fork_remote(state))
             except PushPersistenceError as exc:
                 return cast(
                     TaskTakeoverState,
                     update_state_timestamp(
                         build_persistence_error_state(
-                            state,
+                            dict(state),
                             exc,
                             retry_node="execute_task_changes",
                         )
@@ -92,38 +104,55 @@ async def execute_task_changes(state: TaskTakeoverState) -> TaskTakeoverState:
                 "last_error": None,
             }
 
-        # Get details from Jira for task implementation context
-        task_issue = await jira.get_issue(current_task)
-        task_description = task_issue.description or ""
-        plan_content = state.get("plan_content") or ""
-
-        # Build task description with requirements injected
-        review_feedback = state.get("review_feedback")
-        feedback_section = ""
-        if review_feedback:
-            feedback_section = f"## Previous Qualitative Review Feedback\nPlease address the following feedback from the qualitative review:\n{review_feedback}\n\n"
-
-        task_prompt = (
-            f"You are implementing changes for task takeover [{current_task}].\n\n"
-            f"## Repository Execution Scope\n"
-            f"Current repository: `{current_repo}`\n"
-            f"Implement and validate only the approved-plan steps that belong to "
-            f"`{current_repo}`. Do not search for, create, or modify files assigned to "
-            f"other repositories in the plan. Those repositories are handled in separate "
-            f"workspaces. Completion for this run is evaluated only against the current "
-            f"repository's scope.\n\n"
-            f"{feedback_section}"
-            f"## Approved Implementation Plan\n{plan_content}\n\n"
-            f"## Task Description\n{task_description}\n\n"
-            f"## Critical Instructions\n"
-            f"1. Read and understand the existing codebase.\n"
-            f"2. Apply code modifications according to the approved plan.\n"
-            f"3. You MUST inject at least one new or modified test file inside the workspace to verify the changes.\n"
-            f"4. Run compilation and local test suite commands inside the container workspace.\n"
-            f"5. Feed any build/test error and failure logs directly back to your reasoning process to enable iterative self-correction.\n"
-            f"6. Make sure all compilation and local tests pass successfully before finishing.\n"
+        request = await project_implementation_input(
+            {**state, "current_task_key": current_task},
+            jira,
+        )
+        outcome = await invoke_builtin_station(request)
+        assert outcome.output is not None
+        state = cast(
+            TaskTakeoverState, {**state, **reduce_implementation_input(state, request, outcome)}
+        )
+        primary_id = outcome.output.work_unit["source_artifact_ids"][0]
+        artifact_titles = {
+            "epic_plan": "Approved Implementation Plan",
+            "plan": "Approved Implementation Plan",
+            "spec": "Technical Specification",
+            "rca": "Root Cause Analysis",
+            "prd": "Product Requirements Document",
+            "ticket": "Root Ticket Context",
+        }
+        supporting_artifacts = tuple(
+            ExecutionArtifact(
+                artifact_titles.get(
+                    str(artifact.get("kind", "artifact")),
+                    str(artifact.get("kind", "artifact")).replace("_", " ").title(),
+                ),
+                str(artifact.get("content", "")),
+            )
+            for artifact in outcome.output.context_artifacts
+            if artifact.get("id") != primary_id and artifact.get("content")
         )
 
+        request = ExecutionRequest(
+            ticket_key=ticket_key,
+            work_id=current_task,
+            repository=current_repo,
+            workspace_path=workspace_path,
+            summary=f"Execute task takeover changes for {current_task}",
+            description=outcome.output.instructions,
+            description_title="Task Description",
+            node_name="execute_task_changes",
+            step_name="task_takeover_execution",
+            policy_key="task_takeover_execution",
+            commit_message=(
+                f"[{current_task}] feat: implement task takeover execution changes and tests"
+            ),
+            artifacts=supporting_artifacts,
+            review_feedback=state.get("review_feedback"),
+            critical_instructions=load_prompt("task-takeover-execution-instructions"),
+        )
+        task_prompt = build_execution_prompt(request)
         task_prompt = await fetch_and_inject_references(state, jira, task_prompt)
 
         # Let ContainerRunner derive container limits from application settings.
@@ -131,68 +160,18 @@ async def execute_task_changes(state: TaskTakeoverState) -> TaskTakeoverState:
 
         # Run task execution inside the container
         container_started = True
-        result = await runner.run(
-            workspace_path=Path(workspace_path),
-            task_summary=f"Execute task takeover changes for {current_task}",
-            task_description=task_prompt,
-            ticket_key=ticket_key,
-            task_key=current_task,
-            repo_name=current_repo,
-            step_name="task_takeover_execution",
-            policy_key="task_takeover_execution",
-            skill_name="implement-task",
-        )
-
-        # Collect review exhaustion data (if auto-review ran and exhausted)
-        state = merge_review_exhaustion(state, result, current_task, "task_takeover_execution")
-        state = capture_handoff(workspace_path, current_repo, current_task, state)
-        container_started = False
-
-        # Initialize GitOperations on the host to stage and commit
-        committed = False
-        commit_message = (
-            f"[{current_task}] feat: implement task takeover execution changes and tests"
-        )
-
-        # Check for uncommitted changes on host and stage/commit
-        if git.has_uncommitted_changes():
-            git.stage_all()
-            committed = git.commit(commit_message)
-
-        # Preserve the cumulative committed state if we've already committed in a previous attempt
-        prev_commit_info = state.get("commit_info") or {}
-        prev_committed = prev_commit_info.get("committed", False)
-        has_ever_committed = prev_committed or committed
-
-        current_sha = git.get_current_sha()
-        execution_state = {
-            **state,
-            "task_execution_results": {
-                "success": result.success,
-                "exit_code": result.exit_code,
-                "error_message": result.error_message,
-            },
-            "task_execution_logs": {
-                "stdout": result.stdout,
-                "stderr": result.stderr,
-            },
-            "commit_info": {
-                "sha": current_sha,
-                "message": commit_message,
-                "committed": has_ever_committed,
-            },
-            "current_node": "execute_task_changes",
-            "last_error": None if result.success else result.error_message,
-            "retry_count": 0 if result.success else state.get("retry_count", 0) + 1,
-        }
-
-        # Review may be consumed by another worker with a different local
-        # filesystem. Persist the exact commit before checkpointing this node.
         try:
-            await push_to_fork_with_retry(git)
-        except PushPersistenceError as exc:
+            execution_state = await run_and_persist_execution(
+                state,
+                request,
+                runner=runner,
+                git=git,
+                prompt=task_prompt,
+            )
+        except ExecutionPersistenceError as exc:
+            container_started = False
             pending_state = {
-                **execution_state,
+                **exc.state,
                 "implementation_push_pending": True,
                 "implementation_push_pending_task": current_task,
             }
@@ -201,18 +180,31 @@ async def execute_task_changes(state: TaskTakeoverState) -> TaskTakeoverState:
                 update_state_timestamp(
                     build_persistence_error_state(
                         pending_state,
-                        exc,
+                        exc.cause,
                         retry_node="execute_task_changes",
                     )
                 ),
             )
+        container_started = False
 
         # Store results, logs, and commit info in state
+        completed_units = list(execution_state.get("work_units") or [])
+        execution_succeeded = bool(
+            (execution_state.get("task_execution_results") or {}).get("success")
+        )
+        if execution_succeeded:
+            for unit in completed_units:
+                if unit.get("id") == outcome.output.work_unit["id"]:
+                    unit["status"] = "completed"
         return cast(
             TaskTakeoverState,
             update_state_timestamp(
                 {
                     **execution_state,
+                    "work_units": completed_units,
+                    "current_work_unit_id": (
+                        None if execution_succeeded else outcome.output.work_unit["id"]
+                    ),
                     "implementation_push_pending": False,
                     "implementation_push_pending_task": None,
                     "persistence_retry_count": 0,
@@ -223,7 +215,10 @@ async def execute_task_changes(state: TaskTakeoverState) -> TaskTakeoverState:
     except Exception as e:
         logger.error(f"execute_task_changes failed for {ticket_key}: {e}")
         if container_started:
-            state = capture_handoff(workspace_path, current_repo, current_task, state)
+            state = cast(
+                TaskTakeoverState,
+                capture_handoff(workspace_path, current_repo, current_task, dict(state)),
+            )
         return cast(
             TaskTakeoverState,
             update_state_timestamp(

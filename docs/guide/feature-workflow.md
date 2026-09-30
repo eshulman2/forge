@@ -66,22 +66,31 @@ Forge generates a behavioral specification from the approved PRD, typically usin
 
 Forge breaks the feature into logical epics — high-level areas of work that map to implementation phases.
 
-**Human action:** Review the epic plan. You have four options at this stage:
+By default, Forge uses an interactive **Draft Review Flow** at this stage (unless YOLO mode is active):
+1. Instead of creating Jira tickets immediately, Forge stores the proposed epics in durable workflow state.
+2. Forge posts a markdown table comment on the Feature ticket outlining the proposed Epics. The comment is a review view; the workflow checkpoint is the authoritative draft.
+3. The workflow pauses at `plan_approval_gate`.
 
-| Action | How |
-|--------|-----|
-| Approve | Change label to `forge:plan-approved` |
-| Ask a question | Comment with `?` prefix — Forge answers without re-decomposing |
-| Revise one epic | `!` comment on the **specific epic sub-ticket** — Forge updates only that epic |
-| Redo the full decomposition | `!` comment on the **feature ticket** — Forge regenerates all epics with your feedback |
+**Human action:** Review the epic plan draft. You have several options at this stage:
+
+| Action | How | Description |
+|--------|-----|-------------|
+| **Approve** | Comment `/forge approve` OR set label to `forge:plan-approved` | Forge provisions the Epic sub-tickets from the workflow-state draft and advances to Task Generation. |
+| **Direct Edit** | Use `/forge` commands (e.g. `/forge update`, `/forge remove`, etc.) | Directly modify the workflow-state draft and regenerate the proposal comment. See [Jira Labels & Comments](labels.md) for a list of commands. |
+| **Ask a question** | Comment with `?` prefix or `@forge ask` | Forge answers your question without regenerating the draft. |
+| **Request revisions** | Comment with `!` prefix followed by your feedback | Forge uses LLM assistance to revise the workflow-state draft and update the proposal comment with your feedback. |
+
+If `forge:yolo` mode is active, the draft review is bypassed. Epics are created in Jira immediately, and the workflow automatically proceeds to Task Generation.
+
+If `forge:direct-mode` is active, the draft review is also bypassed and Epics are created in Jira immediately, but the workflow still pauses at the `plan_approval_gate` waiting for manual human approval (via label or commands) before proceeding.
 
 ```mermaid
 flowchart TD
     Gate([plan_approval_gate])
-    Gate -->|forge:plan-approved| Next[Generate Tasks]
+    Gate -->|forge:plan-approved or /forge approve| Next[Generate Tasks]
     Gate -->|"? on feature ticket"| QA[Answer Question]
     Gate -->|"! on feature ticket"| Regen[Regenerate All Epics]
-    Gate -->|"! on epic sub-ticket"| Update[Update Single Epic]
+    Gate -->|"/forge update/remove/exclude/add"| Update[Modify Draft]
     QA --> Gate
     Regen --> Gate
     Update --> Gate
@@ -93,22 +102,31 @@ flowchart TD
 
 Forge generates granular implementation tasks scoped to individual repositories. Each task is sized to fit in a single container execution pass.
 
-**Human action:** Review the tasks. You have four options at this stage:
+By default, Forge uses an interactive **Draft Review Flow** at this stage (unless YOLO mode is active):
+1. Instead of creating Jira tickets immediately, Forge stores the proposed tasks in durable workflow state.
+2. Forge posts a markdown table comment on the Feature ticket outlining the proposed Tasks. The comment is a review view; the workflow checkpoint is the authoritative draft.
+3. The workflow pauses at `task_approval_gate`.
 
-| Action | How |
-|--------|-----|
-| Approve | Change label to `forge:task-approved` |
-| Ask a question | Comment with `?` prefix — Forge answers without regenerating |
-| Revise one task | `!` comment on the **specific task sub-ticket** — Forge updates only that task |
-| Regenerate all tasks | `!` comment on the **feature or epic ticket** — Forge regenerates the full task list with your feedback |
+**Human action:** Review the task draft. You have several options at this stage:
+
+| Action | How | Description |
+|--------|-----|-------------|
+| **Approve** | Comment `/forge approve` OR set label to `forge:task-approved` | Forge provisions the Task sub-tickets from the workflow-state draft and advances to Implementation. |
+| **Direct Edit** | Use `/forge` commands (e.g. `/forge update`, `/forge remove`, etc.) | Directly modify the workflow-state draft and regenerate the proposal comment. See [Jira Labels & Comments](labels.md) for a list of commands. |
+| **Ask a question** | Comment with `?` prefix or `@forge ask` | Forge answers your question without regenerating the draft. |
+| **Request revisions** | Comment with `!` prefix followed by your feedback | Forge uses LLM assistance to revise the workflow-state draft and update the proposal comment with your feedback. |
+
+If `forge:yolo` mode is active, the draft review is bypassed. Tasks are created in Jira immediately, and the workflow automatically proceeds to Implementation.
+
+If `forge:direct-mode` is active, the draft review is also bypassed and Tasks are created in Jira immediately, but the workflow still pauses at the `task_approval_gate` waiting for manual human approval (via label or commands) before proceeding.
 
 ```mermaid
 flowchart TD
     Gate([task_approval_gate])
-    Gate -->|forge:task-approved| Next[Implement Tasks]
+    Gate -->|forge:task-approved or /forge approve| Next[Implement Tasks]
     Gate -->|"? on ticket"| QA[Answer Question]
     Gate -->|"! on feature/epic"| Regen[Regenerate All Tasks]
-    Gate -->|"! on task sub-ticket"| Update[Update Single Task]
+    Gate -->|"/forge update/remove/exclude/add"| Update[Modify Draft]
     QA --> Gate
     Regen --> Gate
     Update --> Gate
@@ -170,6 +188,9 @@ The PR is now ready for human review. Merge when satisfied, or request changes t
 
 Once the PR is merged, Forge automatically completes the workflow by transitioning the Feature, all associated Tasks and Epics, and its parent Epic (if present) to **`Closed`** status in Jira.
 
+!!! note "PR Merge Reconciliation"
+    A merged pull request is terminally reconciled by its repository namespace and pull request number, not by its head SHA. This design ensures that merge detection remains robust and unaffected by commit rebuilds, squashing, or rebase operations during review.
+
 ## Q&A Mode
 
 At any approval gate, you can ask questions without triggering regeneration:
@@ -204,7 +225,7 @@ If a stage fails, Forge:
 1. Sets the `forge:blocked` label
 2. Posts a comment tagging the reporter and assignee with the error
 
-To retry, add the `forge:retry` label. Forge resumes from the exact node that failed — not from the beginning.
+To retry, add the `forge:retry` label. Forge resumes from the exact node that failed — not from the beginning. For an unresolved provider write, conflicting event, or effect replay, inspect the [operations guide](../operations.md) before retrying.
 
 !!! tip "CI retries"
     If CI fix attempts are exhausted, `forge:retry` resets the attempt counter for a fresh budget of retries.

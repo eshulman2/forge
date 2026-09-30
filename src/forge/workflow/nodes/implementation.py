@@ -23,8 +23,10 @@ from forge.workflow.nodes.git_persistence import (
     PushPersistenceError,
     build_persistence_error_state,
     push_to_fork_with_retry,
+    use_fork_remote,
 )
 from forge.workflow.nodes.workspace_setup import prepare_workspace
+from forge.workflow.sandbox_execution import execute_sandbox_kwargs
 from forge.workflow.utils import merge_review_exhaustion, update_state_timestamp
 from forge.workflow.utils.jira_status import post_status_comment
 from forge.workflow.utils.references import fetch_and_inject_references
@@ -62,7 +64,7 @@ async def implement_task(state: WorkflowState) -> WorkflowState:
 
     try:
         git: GitOperations
-        workspace_path, git = prepare_workspace(state)
+        workspace_path, git = await prepare_workspace(state)
         state = {**state, "workspace_path": workspace_path}
     except Exception as exc:
         logger.error("Unable to prepare implementation workspace for %s: %s", ticket_key, exc)
@@ -80,7 +82,7 @@ async def implement_task(state: WorkflowState) -> WorkflowState:
     )
     if state.get("implementation_push_pending") and same_workspace_survived:
         try:
-            await push_to_fork_with_retry(git)
+            await push_to_fork_with_retry(git, use_fork=use_fork_remote(state))
         except PushPersistenceError as exc:
             return update_state_timestamp(
                 build_persistence_error_state(state, exc, retry_node=implementation_node)
@@ -141,7 +143,7 @@ async def implement_task(state: WorkflowState) -> WorkflowState:
                 )
                 git.stage_all()
                 git.commit(f"[{ticket_key}] chore: commit uncommitted changes after implementation")
-            await push_to_fork_with_retry(git)
+            await push_to_fork_with_retry(git, use_fork=use_fork_remote(state))
         except PushPersistenceError as exc:
             return update_state_timestamp(
                 build_persistence_error_state(state, exc, retry_node=implementation_node)
@@ -206,7 +208,10 @@ async def implement_task(state: WorkflowState) -> WorkflowState:
         # Copy list to avoid mutation after passing to runner
         implemented_tasks = list(state.get("implemented_tasks", []))
         container_started = True
-        result = await runner.run(
+        result = await execute_sandbox_kwargs(
+            state,
+            runner=runner,
+            discriminator="implementation",
             workspace_path=Path(workspace_path),
             task_summary=task_summary,
             task_description=full_description,
@@ -235,7 +240,7 @@ async def implement_task(state: WorkflowState) -> WorkflowState:
             # Persist each task commit before checkpointing. A subsequent task
             # or local review may resume on a worker with a different filesystem.
             try:
-                await push_to_fork_with_retry(git)
+                await push_to_fork_with_retry(git, use_fork=use_fork_remote(state))
             except PushPersistenceError as exc:
                 pending_state = {
                     **state,

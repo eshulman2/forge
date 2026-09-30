@@ -152,9 +152,10 @@ class TestImplementationStatusInstrumentationCompletionComment:
         with (
             patch("forge.workflow.nodes.implementation.JiraClient", return_value=mock_jira),
             patch("forge.workflow.nodes.implementation.ContainerRunner", return_value=mock_runner),
-            patch("forge.workflow.nodes.implementation.post_status_comment") as mock_post_status,
+            patch(
+                "forge.workflow.nodes.implementation.post_status_comment", new_callable=AsyncMock
+            ) as mock_post_status,
         ):
-            mock_post_status.return_value = AsyncMock()
             result = await implement_task(state)
 
         # Verify post_status_comment was called twice (start + completion)
@@ -186,9 +187,10 @@ class TestImplementationStatusInstrumentationCompletionComment:
         with (
             patch("forge.workflow.nodes.implementation.JiraClient", return_value=mock_jira),
             patch("forge.workflow.nodes.implementation.ContainerRunner", return_value=mock_runner),
-            patch("forge.workflow.nodes.implementation.post_status_comment") as mock_post_status,
+            patch(
+                "forge.workflow.nodes.implementation.post_status_comment", new_callable=AsyncMock
+            ) as mock_post_status,
         ):
-            mock_post_status.return_value = AsyncMock()
             result = await implement_task(state)
 
         # Verify post_status_comment was called only once (start, NOT completion)

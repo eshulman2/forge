@@ -45,21 +45,44 @@ Standalone Tasks and Epics can be processed with the standard `forge:managed` la
 | `forge:blocked` | Set by Forge when a stage fails. Forge posts a comment with the error. |
 | `forge:retry` | Add this to resume from the exact node that failed, or to transition from `review_response_gate` back to `human_review_gate` (clearing contested review comments). Forge removes it after resuming. |
 | `forge:yolo` | Auto-approve supported planning gates. Human PR review still remains a gate. |
+| `forge:direct-mode` | Direct ticket creation mode (creates Epic/Task tickets immediately in Jira), but still pauses for human approval at the planning gates (instead of auto-approving like `forge:yolo`). |
 | `repo:<owner>/<repo>` | Identifies repositories selected for planning and implementation. |
 
 ## How to Use Labels
 
 **Starting a workflow:** Create a Jira issue and add `forge:managed`. Forge detects the issue type and begins the appropriate pipeline: Feature/Story, Bug, or standalone Task/Epic takeover.
 
-**Approving a stage:** When Forge posts a PRD, spec, or other artifact, it sets the `forge:*-pending` label. Change it to `forge:*-approved` to advance the workflow. Do not add the approved label manually before Forge posts — it won't be recognized until the pending state is set.
+**Approving a stage:** When Forge posts an artifact (such as a PRD or Spec), it sets the `forge:*-pending` label. You can approve it by changing the label to `forge:*-approved` to advance the workflow. For draft-based stages (Epic Plan and Tasks), you can also approve by commenting `/forge approve` on the ticket.
 
-**Requesting revisions:** Start a comment with `!` followed by your feedback. Forge regenerates the artifact and resets the pending label.
+**Interactive Draft Review:** For Epic Decomposition and Task Generation stages, Forge uses a draft-based review flow by default (unless `forge:yolo` or `forge:direct-mode` mode is active).
+1. Instead of creating sub-tickets immediately, Forge stores the proposed items in durable workflow state.
+2. Forge posts a formatted markdown comment on the ticket detailing the proposed plan.
+3. While the stage is pending, you can modify the draft directly using **Jira comment commands** (see below) or request a natural language revision.
+4. Once you approve (via `/forge approve` or setting the approved label), Forge provisions the actual Jira tickets from the workflow-state draft.
 
-**Asking questions:** Start a comment with `?` or `@forge ask`. Forge answers without advancing or regenerating.
+### Jira Comment Commands
 
-**Informational comments:** Comments without a recognized prefix (`!`, `?`, `@forge ask`, `>option`) are ignored by the workflow — use them for team discussion without triggering Forge.
+For stages using the draft-based review flow (Epic Plan and Tasks), you can post comments on the parent ticket with the following commands:
+
+| Command | Description | Example |
+|---------|-------------|---------|
+| `/forge approve` | Approve the draft and provision all non-excluded items as Jira tickets. | `/forge approve` |
+| `/forge remove <ID>` | Remove a draft item by its local sequential ID. Remaining items are automatically re-sequenced. | `/forge remove 3` |
+| `/forge exclude <ID>` | Toggle the exclusion flag of a draft item. Excluded items are skipped during ticket provisioning. | `/forge exclude 2` |
+| `/forge update <ID> key=val` | Update fields of a draft item (supported keys: `summary`, `description`, `repo`). | `/forge update 1 repo="my-org/custom-repo"` |
+| `/forge add key=val` | Add a new proposed item to the draft. | `/forge add summary="New Story" repo="my-org/repo"` |
+
+*Note: Successful command/revision comments are automatically edited by Forge to prepend `✅`. If a command or revision fails, Forge posts a comment detailing the error with a leading `❌`.*
+
+**Requesting revisions:** Start a comment with `!` followed by your feedback (e.g., `! update the repositories to use the new service`). For standard artifacts, Forge regenerates them. For drafts, Forge uses LLM assistance to revise the workflow-state draft and update the proposed plan comment.
+
+**Asking questions:** Start a comment with `?` or `@forge ask`. Forge answers without advancing or regenerating/modifying the drafts.
+
+**Informational comments:** Comments without a recognized prefix (such as `!`, `?`, `@forge ask`, `>option`, or `/forge`) are ignored by the workflow — use them for team discussion without triggering Forge.
 
 **Handling failures:** When `forge:blocked` appears, read the Forge comment for the error. Fix the underlying issue if needed, then add `forge:retry`.
+
+For failures involving provider writes, duplicate/stale/conflicting events, or operator effect replay, use the [operations guide](../operations.md) before adding `forge:retry`. Retry resumes from Forge's durable saved position; it is not a request to rerun the whole lifecycle.
 
 **Resetting contested reviews:** If the workflow is paused at `review_response_gate` due to contested comments, adding `forge:retry` will transition the workflow back to `human_review_gate`, clearing the contested comments and resetting the review state to await a fresh review.
 

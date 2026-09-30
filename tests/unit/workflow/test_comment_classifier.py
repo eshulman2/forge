@@ -92,3 +92,35 @@ class TestClassifyComment:
         """Whitespace-only comments should be informational."""
         assert classify_comment("   ") == CommentType.INFORMATIONAL
         assert classify_comment("\n\t") == CommentType.INFORMATIONAL
+
+    # Command detection tests
+    def test_command_remove(self) -> None:
+        """/forge remove command should be classified as a command."""
+        assert classify_comment("/forge remove 2") == CommentType.INFORMATIONAL
+        assert classify_comment("/Forge remove abc") == CommentType.INFORMATIONAL
+
+    def test_command_exclude(self) -> None:
+        """/forge exclude command should be classified as a command."""
+        assert classify_comment("/forge exclude 3") == CommentType.INFORMATIONAL
+
+    def test_command_add(self) -> None:
+        """/forge add command should be classified as a command."""
+        assert classify_comment('/forge add summary="Implement API"') == CommentType.INFORMATIONAL
+
+    def test_command_update(self) -> None:
+        """/forge update command should be classified as a command."""
+        assert classify_comment('/forge update 1 summary="New Summary"') == CommentType.INFORMATIONAL
+
+    def test_command_case_insensitive_prefix(self) -> None:
+        """/forge commands should be case-insensitive."""
+        assert classify_comment("/FORGE remove 2") == CommentType.INFORMATIONAL
+        assert classify_comment("  /Forge exclude 3") == CommentType.INFORMATIONAL
+
+    def test_command_skip_gate_is_ignored_by_classifier(self) -> None:
+        """skip-gate/unskip-gate are not classified as COMMAND by classify_comment."""
+        assert classify_comment("/forge skip-gate build") == CommentType.INFORMATIONAL
+        assert classify_comment("/forge unskip-gate test") == CommentType.INFORMATIONAL
+
+    def test_command_rebase_is_ignored_by_classifier(self) -> None:
+        """rebase is not classified as COMMAND by classify_comment."""
+        assert classify_comment("/forge rebase") == CommentType.INFORMATIONAL

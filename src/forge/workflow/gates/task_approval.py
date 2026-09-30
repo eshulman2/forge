@@ -9,14 +9,28 @@ To request revision: Add a comment starting with ! (keeps forge:task-pending)
 """
 
 import logging
+from collections.abc import Mapping
+from typing import TYPE_CHECKING
 
 from langgraph.graph import END
 
 from forge.api.routes.metrics import record_approval, record_revision_requested
 from forge.workflow.feature.state import FeatureState as WorkflowState
-from forge.workflow.utils import set_paused
+from forge.workflow.projections.approval import project_approval
+from forge.workflow.reducers.approval import reduce_approval_gate
+from forge.workflow.stations.approval import ApprovalDisposition, run_approval_station
+from forge.workflow.utils import update_state_timestamp
+
+if TYPE_CHECKING:
+    from forge.workflow.effect_runtime import JiraClient
 
 logger = logging.getLogger(__name__)
+
+
+def _draft_item_count(draft: object) -> int:
+    if isinstance(draft, Mapping):
+        return len(draft.get("items", []))
+    return len(getattr(draft, "items", []))
 
 
 def task_approval_gate(state: WorkflowState) -> WorkflowState:
@@ -39,27 +53,18 @@ def task_approval_gate(state: WorkflowState) -> WorkflowState:
     """
     ticket_key = state["ticket_key"]
     task_keys = state.get("task_keys", [])
-    task_count = len(task_keys)
+    draft = state.get("tasks_draft")
+    task_count = len(task_keys) or _draft_item_count(draft)
 
-    # Validate that we actually have tasks to approve
-    if task_count == 0:
-        logger.error(
-            f"Task approval gate reached with 0 Tasks for {ticket_key}. "
-            "This indicates task generation failed. Routing back to retry."
-        )
-        return {
-            **state,
-            "last_error": "No Tasks generated - task generation may have failed",
-            "current_node": "generate_tasks",
-            "retry_count": state.get("retry_count", 0) + 1,
-        }
-
+    request = project_approval(state, "task", item_count=task_count)
+    outcome = run_approval_station(request)
+    updates = reduce_approval_gate(state, request, outcome, "task_approval_gate", "generate_tasks")
     logger.info(
         f"Task approval gate: pausing workflow for {ticket_key} "
         f"({task_count} Tasks pending implementation approval)"
     )
 
-    return set_paused(state, "task_approval_gate")
+    return update_state_timestamp({**state, **updates})
 
 
 def route_task_approval(state: WorkflowState) -> str:
@@ -81,48 +86,147 @@ def route_task_approval(state: WorkflowState) -> str:
     """
     ticket_key = state["ticket_key"]
 
-    # Check if this is a question (Q&A mode) - check FIRST
-    if state.get("is_question") and state.get("feedback_comment"):
+    task_keys = state.get("task_keys") or []
+    draft = state.get("tasks_draft")
+    item_count = len(task_keys) or _draft_item_count(draft)
+    outcome = run_approval_station(project_approval(state, "task", item_count=item_count))
+    assert outcome.output is not None
+    disposition = outcome.output.disposition
+    if disposition is ApprovalDisposition.QUESTION:
         logger.info(f"Q&A mode: routing to answer_question for {ticket_key}")
         return "answer_question"
 
     # YOLO mode: auto-approve without human input
-    if state.get("yolo_mode"):
+    if disposition is ApprovalDisposition.APPROVED:
         logger.info(f"YOLO mode: auto-approving tasks for {ticket_key}")
         record_approval("task")
-        return "task_router"
+        return "provision_tasks"
 
     # Check if revision requested (! feedback comment added)
-    if state.get("revision_requested"):
+    if disposition is ApprovalDisposition.REVISION:
         feedback = state.get("feedback_comment", "")
         current_task = state.get("current_task_key")
         current_epic = state.get("current_epic_key")
 
-        if current_task:
+        if outcome.output.revision_scope == "task":
             # Single Task update - comment was on a specific Task
             logger.info(f"Single Task revision requested for {current_task}")
             record_revision_requested("task")
             return "update_single_task"
-        elif current_epic:
+        elif outcome.output.revision_scope == "epic":
             # Epic-level regeneration - comment was on a specific Epic
             logger.info(f"Epic Task regeneration requested for {current_epic} on {ticket_key}")
             record_revision_requested("task")
             return "regenerate_epic_tasks"
-        elif feedback:
+        else:
             # Feature-level regeneration - comment was on Feature
             logger.info(f"Full Task regeneration requested for {ticket_key}: {feedback[:100]}...")
             record_revision_requested("task")
             return "regenerate_all_tasks"
 
     # Check if still paused - END and wait for approval webhook
-    if state.get("is_paused"):
+    if disposition is ApprovalDisposition.WAITING:
         logger.info(
             f"Task approval gate: workflow paused for {ticket_key}, "
             "waiting for forge:task-approved label"
         )
         return END
 
-    # Tasks approved, proceed to implementation
-    logger.info(f"Tasks approved for {ticket_key}, proceeding to implementation")
-    record_approval("task")
-    return "task_router"
+    return END
+
+
+async def provision_tasks(state: WorkflowState) -> WorkflowState:
+    """Create approved Task drafts before implementation routing begins."""
+    if state.get("task_keys"):
+        return state
+
+    from forge.workflow.effect_runtime import JiraClient
+
+    jira = JiraClient()
+    try:
+        task_keys, tasks_by_repo = await provision_tasks_from_draft(state, jira)
+        return {**state, "task_keys": task_keys, "tasks_by_repo": tasks_by_repo}
+    finally:
+        await jira.close()
+
+
+async def provision_tasks_from_draft(
+    state: WorkflowState, jira: "JiraClient"
+) -> tuple[list[str], dict[str, list[str]]]:
+    """Materialize the approved workflow-state draft as Jira Tasks."""
+    from forge.models.draft import ForgeDecompositionDraft
+    from forge.models.workflow import ForgeLabel
+    from forge.workflow.utils.repo_resolution import repo_from_labels
+
+    def valid_repo(repo: str | None) -> bool:
+        return bool(repo and repo != "unknown" and "/" in repo)
+
+    async def resolve_repo(task_repo: str | None, epic_key: str | None) -> str | None:
+        """Use task data first, then the parent Epic's repo label only."""
+        if valid_repo(task_repo):
+            return task_repo
+        if not epic_key:
+            return None
+        return repo_from_labels(await jira.get_labels(epic_key))
+
+    async def report_missing_repo(task_key: str, epic_key: str | None) -> None:
+        parent = f"parent Epic {epic_key}" if epic_key else "parent Epic"
+        try:
+            await jira.add_comment(
+                task_key,
+                "⚠️ Forge could not assign this Task to a repository. "
+                f"The Task has no `repo:<owner>/<repo>` label and {parent} has no valid "
+                "`repo:<owner>/<repo>` label. Add a repository label to this Task or its "
+                "parent Epic, then retry routing.",
+            )
+        except Exception as exc:
+            logger.warning("Failed to report missing repository on Task %s: %s", task_key, exc)
+
+    ticket_key = state["ticket_key"]
+    existing = await jira.search_issues(
+        f'labels = "forge:parent:{ticket_key}" AND issuetype = Task'
+    )
+    if existing:
+        by_repo: dict[str, list[str]] = {}
+        for issue in existing:
+            repo = await resolve_repo(repo_from_labels(issue.labels), issue.parent_key)
+            if repo:
+                if repo_from_labels(issue.labels) != repo:
+                    await jira.add_labels(issue.key, [f"repo:{repo}"])
+                by_repo.setdefault(repo, []).append(issue.key)
+            else:
+                await report_missing_repo(issue.key, issue.parent_key)
+        return [issue.key for issue in existing], by_repo
+
+    raw = state.get("tasks_draft")
+    if not raw:
+        raise ValueError(f"Approved tasks_draft not found for {ticket_key}")
+    draft = ForgeDecompositionDraft.model_validate(raw) if isinstance(raw, dict) else raw
+    project_key = (await jira.get_issue(ticket_key)).project_key
+    task_keys: list[str] = []
+    by_repo: dict[str, list[str]] = {}
+    for item in draft.items:
+        if item.excluded:
+            continue
+        parent_key = item.epic_key or next(iter(state.get("epic_keys") or []), None)
+        repo = await resolve_repo(item.repo, parent_key)
+        labels = [ForgeLabel.FORGE_MANAGED.value, f"forge:parent:{ticket_key}"]
+        if repo:
+            labels.append(f"repo:{repo}")
+        task_key = await jira.create_task(
+            project_key=project_key,
+            summary=item.summary,
+            description=item.description,
+            parent_key=parent_key,
+            labels=labels,
+        )
+        try:
+            await jira.resolve_and_maybe_assign_tier(task_key)
+        except Exception as exc:
+            logger.warning("Failed to assign model tier to Task %s: %s", task_key, exc)
+        task_keys.append(task_key)
+        if repo:
+            by_repo.setdefault(repo, []).append(task_key)
+        else:
+            await report_missing_repo(task_key, parent_key)
+    return task_keys, by_repo

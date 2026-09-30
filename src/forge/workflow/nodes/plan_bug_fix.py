@@ -10,11 +10,13 @@ from pathlib import Path
 from langgraph.graph import END
 
 from forge.config import get_settings
-from forge.integrations.jira.client import JiraClient, artifact_interaction_options
+from forge.integrations.jira.client import artifact_interaction_options
 from forge.models.workflow import ForgeLabel
 from forge.prompts import load_prompt
 from forge.sandbox import ContainerRunner
 from forge.workflow.bug.state import BugState
+from forge.workflow.effect_runtime import JiraClient
+from forge.workflow.sandbox_execution import execute_sandbox_kwargs
 from forge.workflow.utils import (
     merge_review_exhaustion,
     set_paused,
@@ -22,7 +24,8 @@ from forge.workflow.utils import (
 )
 from forge.workflow.utils.jira_status import post_status_comment
 from forge.workflow.utils.references import fetch_and_inject_references
-from forge.workflow.utils.repo_resolution import get_effective_repos
+from forge.workflow.utils.repo_resolution import ensure_repo_labels, get_effective_repos
+from forge.workflow.utils.workflow_identity import workflow_identity_labels
 
 logger = logging.getLogger(__name__)
 
@@ -143,7 +146,10 @@ async def _run_plan_container(
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace_path = Path(tmpdir)
             runner = ContainerRunner(settings)
-            result = await runner.run(
+            result = await execute_sandbox_kwargs(
+                state,
+                runner=runner,
+                discriminator="plan_bug_fix",
                 workspace_path=workspace_path,
                 task_summary=f"Plan bug fix for {ticket_key}",
                 task_description=task_description,
@@ -163,6 +169,13 @@ async def _run_plan_container(
 
             new_plan = _harvest_plan(workspace_path)
 
+        resolved_repos = await ensure_repo_labels(
+            jira,
+            issue,
+            new_plan,
+            list(state.get("repos_to_process") or []),
+        )
+
         comment = _truncate_plan_comment(new_plan)
         comment = f"{comment}\n\n{artifact_interaction_options('plan')}"
         await jira.add_comment(ticket_key, comment)
@@ -172,6 +185,7 @@ async def _run_plan_container(
             {
                 **state,
                 "plan_content": new_plan,
+                "repos_to_process": resolved_repos,
                 "current_node": "plan_approval_gate",
                 "last_error": None,
                 "retry_count": 0,
@@ -358,9 +372,25 @@ async def decompose_plan(state: BugState) -> BugState:
                         f"repo:{repo}",
                         ForgeLabel.FORGE_MANAGED.value,
                         f"forge:parent:{ticket_key}",
+                        *workflow_identity_labels(state),
                     ],
                 )
                 await jira.create_issue_link("Related", task_key, ticket_key)
+
+                # Assign the model tier for the newly created Task (BR-011).
+                # Only fresh Tasks are assigned — the covered[repo] reuse
+                # branch above intentionally skips this since a reused Task is
+                # not a fresh Task. Comment/label failures MUST NOT fail Task
+                # creation (BR-013 / SC-001): log but continue.
+                try:
+                    await jira.resolve_and_maybe_assign_tier(
+                        task_key,
+                        f"Fix: {bug_summary} ({repo})",
+                        scoped_description,
+                        allow_overwrite=False,
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to assign model tier to Task {task_key}: {e}")
 
             tasks_by_repo[repo] = [task_key]
             all_task_keys.append(task_key)
