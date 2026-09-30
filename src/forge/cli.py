@@ -536,6 +536,7 @@ async def cmd_project_setup(args: argparse.Namespace) -> int:
     jira = JiraClient()
 
     try:
+        mutations = {}
 
         def parse_repo(raw: str) -> str | dict:
             if raw.startswith("{"):
@@ -601,7 +602,9 @@ async def cmd_project_setup(args: argparse.Namespace) -> int:
                 return 1
 
             await jira.set_project_property(project_key, "forge.repos", parsed_repos)
-            print(f"[OK] forge.repos = {parsed_repos}")
+            mutations["forge.repos"] = {"operation": "set", "value": parsed_repos}
+            if not getattr(args, "json", False):
+                print(f"[OK] forge.repos = {parsed_repos}")
 
         # forge.default_repo
         remove_default_repo = getattr(args, "remove_default_repo", False)
@@ -613,7 +616,9 @@ async def cmd_project_setup(args: argparse.Namespace) -> int:
             return 1
         if remove_default_repo:
             await jira.delete_project_property(project_key, "forge.default_repo")
-            print("[OK] forge.default_repo removed")
+            mutations["forge.default_repo"] = {"operation": "remove", "value": None}
+            if not getattr(args, "json", False):
+                print("[OK] forge.default_repo removed")
         elif args.default_repo:
             if "/" not in args.default_repo:
                 print(
@@ -622,7 +627,9 @@ async def cmd_project_setup(args: argparse.Namespace) -> int:
                 )
                 return 1
             await jira.set_project_property(project_key, "forge.default_repo", args.default_repo)
-            print(f"[OK] forge.default_repo = {args.default_repo!r}")
+            mutations["forge.default_repo"] = {"operation": "set", "value": args.default_repo}
+            if not getattr(args, "json", False):
+                print(f"[OK] forge.default_repo = {args.default_repo!r}")
 
         # forge.prd_proposals_repo — opt-in / opt-out for PRD approval via GitHub PR
         remove_prd_repo = getattr(args, "remove_prd_proposals_repo", False)
@@ -634,11 +641,15 @@ async def cmd_project_setup(args: argparse.Namespace) -> int:
             return 1
         if remove_prd_repo:
             await jira.delete_project_property(project_key, "forge.prd_proposals_repo")
-            print("[OK] forge.prd_proposals_repo removed (PRD approval via Jira labels)")
+            mutations["forge.prd_proposals_repo"] = {"operation": "remove", "value": None}
+            if not getattr(args, "json", False):
+                print("[OK] forge.prd_proposals_repo removed (PRD approval via Jira labels)")
         elif args.prd_proposals_repo is not None:
             if args.prd_proposals_repo == "":
                 await jira.delete_project_property(project_key, "forge.prd_proposals_repo")
-                print("[OK] forge.prd_proposals_repo removed (PRD approval via Jira labels)")
+                mutations["forge.prd_proposals_repo"] = {"operation": "remove", "value": None}
+                if not getattr(args, "json", False):
+                    print("[OK] forge.prd_proposals_repo removed (PRD approval via Jira labels)")
             else:
                 if "/" not in args.prd_proposals_repo:
                     print(
@@ -649,7 +660,12 @@ async def cmd_project_setup(args: argparse.Namespace) -> int:
                 await jira.set_project_property(
                     project_key, "forge.prd_proposals_repo", args.prd_proposals_repo
                 )
-                print(f"[OK] forge.prd_proposals_repo = {args.prd_proposals_repo!r}")
+                mutations["forge.prd_proposals_repo"] = {
+                    "operation": "set",
+                    "value": args.prd_proposals_repo,
+                }
+                if not getattr(args, "json", False):
+                    print(f"[OK] forge.prd_proposals_repo = {args.prd_proposals_repo!r}")
 
         # forge.prd_proposals_path — base directory for enhancement folders
         remove_prd_path = getattr(args, "remove_prd_proposals_path", False)
@@ -661,15 +677,21 @@ async def cmd_project_setup(args: argparse.Namespace) -> int:
             return 1
         if remove_prd_path:
             await jira.delete_project_property(project_key, "forge.prd_proposals_path")
-            print("[OK] forge.prd_proposals_path removed (reset to default: repo root)")
+            mutations["forge.prd_proposals_path"] = {"operation": "remove", "value": None}
+            if not getattr(args, "json", False):
+                print("[OK] forge.prd_proposals_path removed (reset to default: repo root)")
         elif args.prd_proposals_path is not None:
             if args.prd_proposals_path == "":
                 await jira.delete_project_property(project_key, "forge.prd_proposals_path")
-                print("[OK] forge.prd_proposals_path removed (reset to default: repo root)")
+                mutations["forge.prd_proposals_path"] = {"operation": "remove", "value": None}
+                if not getattr(args, "json", False):
+                    print("[OK] forge.prd_proposals_path removed (reset to default: repo root)")
             else:
                 path = args.prd_proposals_path.strip("/")
                 await jira.set_project_property(project_key, "forge.prd_proposals_path", path)
-                print(f"[OK] forge.prd_proposals_path = {path!r}")
+                mutations["forge.prd_proposals_path"] = {"operation": "set", "value": path}
+                if not getattr(args, "json", False):
+                    print(f"[OK] forge.prd_proposals_path = {path!r}")
 
         # forge.skills — built from --add-skill flags and/or --skills-config JSON
         skill_entries: list[dict] = []
@@ -724,7 +746,9 @@ async def cmd_project_setup(args: argparse.Namespace) -> int:
             return 1
         if remove_skills:
             await jira.delete_project_property(project_key, "forge.skills")
-            print("[OK] forge.skills removed")
+            mutations["forge.skills"] = {"operation": "remove", "value": None}
+            if not getattr(args, "json", False):
+                print("[OK] forge.skills removed")
         elif skill_entries:
             from forge.skills.models import SkillEntry
 
@@ -738,7 +762,9 @@ async def cmd_project_setup(args: argparse.Namespace) -> int:
             skill_entries = validated
 
             await jira.set_project_property(project_key, "forge.skills", skill_entries)
-            print(f"[OK] forge.skills = {len(skill_entries)} entries")
+            mutations["forge.skills"] = {"operation": "set", "value": skill_entries}
+            if not getattr(args, "json", False):
+                print(f"[OK] forge.skills = {len(skill_entries)} entries")
 
         # forge.model_policy — exact per-stage project overrides. User
         # workstations validate syntax only; the Forge runtime owns and
@@ -764,7 +790,9 @@ async def cmd_project_setup(args: argparse.Namespace) -> int:
             return 1
         if clear_model_policy:
             await jira.delete_project_property(project_key, "forge.model_policy")
-            print("[OK] forge.model_policy deleted")
+            mutations["forge.model_policy"] = {"operation": "remove", "value": None}
+            if not getattr(args, "json", False):
+                print("[OK] forge.model_policy deleted")
         elif model_policy_arg:
             try:
                 model_policy = json.loads(model_policy_arg)
@@ -820,10 +848,14 @@ async def cmd_project_setup(args: argparse.Namespace) -> int:
                 return 1
             if model_policy:
                 await jira.set_project_property(project_key, "forge.model_policy", model_policy)
-                print(f"[OK] forge.model_policy = {len(model_policy)} overrides")
+                mutations["forge.model_policy"] = {"operation": "set", "value": model_policy}
+                if not getattr(args, "json", False):
+                    print(f"[OK] forge.model_policy = {len(model_policy)} overrides")
             else:
                 await jira.delete_project_property(project_key, "forge.model_policy")
-                print("[OK] forge.model_policy deleted (no overrides remain)")
+                mutations["forge.model_policy"] = {"operation": "remove", "value": None}
+                if not getattr(args, "json", False):
+                    print("[OK] forge.model_policy deleted (no overrides remain)")
 
         if model_all:
             from forge.models.model_policy import ModelTarget
@@ -839,10 +871,14 @@ async def cmd_project_setup(args: argparse.Namespace) -> int:
                 print(f"Error: invalid model default: {exc}", file=sys.stderr)
                 return 1
             await jira.set_project_property(project_key, "forge.model_default", model_default)
-            print("[OK] forge.model_default set")
+            mutations["forge.model_default"] = {"operation": "set", "value": model_default}
+            if not getattr(args, "json", False):
+                print("[OK] forge.model_default set")
         elif clear_model_default:
             await jira.delete_project_property(project_key, "forge.model_default")
-            print("[OK] forge.model_default deleted")
+            mutations["forge.model_default"] = {"operation": "remove", "value": None}
+            if not getattr(args, "json", False):
+                print("[OK] forge.model_default deleted")
 
         # forge.references property processing
         # --ref-description and its deprecated alias --description share the same
@@ -892,8 +928,10 @@ async def cmd_project_setup(args: argparse.Namespace) -> int:
             references_updated = True
         if references_updated:
             await jira.set_project_references(project_key, current_references)
-            print(f"[OK] forge.references = {current_references}")
-        if list_references:
+            mutations["forge.references"] = {"operation": "set", "value": current_references}
+            if not getattr(args, "json", False):
+                print(f"[OK] forge.references = {current_references}")
+        if list_references and not getattr(args, "json", False):
             print(f"Standing references for project {project_key}:")
             if not current_references:
                 print("  (none)")
@@ -927,7 +965,7 @@ async def cmd_project_setup(args: argparse.Namespace) -> int:
                 list_references,
             ]
         ):
-            print(
+            msg = (
                 "Nothing to set — specify at least one of: "
                 "--repo, --add-repo, --remove-repo, --default-repo, --remove-default-repo, "
                 "--prd-proposals-repo, --remove-prd-proposals-repo, "
@@ -938,7 +976,14 @@ async def cmd_project_setup(args: argparse.Namespace) -> int:
                 ", --clear-model-default"
                 ", --add-reference, --remove-reference, --list-references"
             )
+            if getattr(args, "json", False):
+                print(msg, file=sys.stderr)
+            else:
+                print(msg)
             return 1
+
+        if getattr(args, "json", False):
+            print(json.dumps({"project": project_key, "mutations": mutations}, indent=2))
 
         return 0
 
@@ -1969,6 +2014,11 @@ Examples:
         "--list-references",
         action="store_true",
         help="List all project-level standing references.",
+    )
+    setup_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output mutation details as structured JSON for scripting",
     )
 
     # get-config command
