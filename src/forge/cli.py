@@ -529,16 +529,27 @@ async def cmd_skills_update(_args: argparse.Namespace) -> int:
 async def cmd_project_setup(args: argparse.Namespace) -> int:
     """Configure Jira project properties for Forge."""
     import json
+    import sys
+    import io
 
     from forge.integrations.jira.client import JiraClient
 
     project_key = args.project_key.upper()
-    jira = JiraClient()
+    is_json = getattr(args, "json", False)
+
+    jira = None
+    original_stdout = sys.stdout
+    exit_code = 1
+    mutations = {}
 
     try:
+        if is_json:
+            sys.stdout = io.StringIO()
+
+        jira = JiraClient()
+
         # [AISOS-2527] Suppress human-readable stdout (silent success execution) during JSON mode.
         # Any success or informational prints must be conditionalized with "if not getattr(args, 'json', False):"
-        mutations = {}
 
         def parse_repo(raw: str) -> str | dict:
             if raw.startswith("{"):
@@ -984,17 +995,20 @@ async def cmd_project_setup(args: argparse.Namespace) -> int:
                 print(msg)
             return 1
 
-        if getattr(args, "json", False):
-            # [AISOS-2526] Implement JSON serialization and output to stdout on successful completion
-            print(json.dumps({"project": project_key, "mutations": mutations}, indent=2))
-
+        exit_code = 0
         return 0
 
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
+        exit_code = 1
         return 1
     finally:
-        await jira.close()
+        if is_json:
+            sys.stdout = original_stdout
+            if exit_code == 0:
+                print(json.dumps({"project": project_key, "mutations": mutations}, indent=2))
+        if jira is not None:
+            await jira.close()
 
 
 async def cmd_get_config(args: argparse.Namespace) -> int:

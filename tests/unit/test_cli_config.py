@@ -1209,6 +1209,51 @@ class TestCLIConfigProjectSetupJson:
         assert not out
 
     @pytest.mark.asyncio
+    async def test_sc005_failure_reporting_json_exception(self, capsys):
+        """Verify that general exceptions raised during JSON mode suppress stdout and route cleanly to stderr."""
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, patch
+
+        args = SimpleNamespace(
+            project_key="AISOS",
+            repo=None,
+            add_repo=None,
+            remove_repo=None,
+            default_repo="org/repo",
+            remove_default_repo=False,
+            prd_proposals_repo=None,
+            remove_prd_proposals_repo=False,
+            prd_proposals_path=None,
+            remove_prd_proposals_path=False,
+            skills_config=None,
+            add_skill=None,
+            remove_skills=False,
+            model_policy=None,
+            model=None,
+            model_all=None,
+            remove_model=None,
+            clear_model_policy=False,
+            clear_model_default=False,
+            add_reference=None,
+            ref_description=None,
+            remove_reference=None,
+            list_references=False,
+            json=True,
+        )
+
+        with patch("forge.integrations.jira.client.JiraClient") as mock_client:
+            client_inst = mock_client.return_value
+            client_inst.set_project_property.side_effect = Exception("Jira client API error")
+            client_inst.close = AsyncMock()
+
+            code = await cmd_project_setup(args)
+
+        assert code == 1
+        out, err = capsys.readouterr()
+        assert "Error: Jira client API error" in err
+        assert not out
+
+    @pytest.mark.asyncio
     async def test_json_mode_prd_proposals_repo_set_and_remove(self, capsys):
         """Test forge.prd_proposals_repo setting and removal in JSON mode."""
         from types import SimpleNamespace
