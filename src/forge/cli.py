@@ -536,6 +536,8 @@ async def cmd_project_setup(args: argparse.Namespace) -> int:
     jira = JiraClient()
 
     try:
+        # [AISOS-2527] Suppress human-readable stdout (silent success execution) during JSON mode.
+        # Any success or informational prints must be conditionalized with "if not getattr(args, 'json', False):"
         mutations = {}
 
         def parse_repo(raw: str) -> str | dict:
