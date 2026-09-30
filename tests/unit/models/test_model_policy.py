@@ -170,7 +170,7 @@ def test_openai_compatible_connection_flows_endpoint_without_secret() -> None:
         default={"connection": "gateway", "model": "custom-model"},
     )
 
-    resolved = resolver.resolve("implement_task")
+    resolved = resolver.resolve("implement_work")
 
     assert resolved.base_url == "https://gateway.example/v1"
     assert resolved.api_key_env == "GATEWAY_API_KEY"

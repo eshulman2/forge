@@ -358,6 +358,10 @@ class Settings(BaseSettings):
     def resolve_openai_api_key(self, api_key_env: str | None) -> str:
         """Resolve a compatible endpoint credential without serializing it into policy."""
         if not api_key_env:
+            # Named connections opt in to credentials through api_key_env.
+            # The global key belongs only to the implicit legacy connection.
+            if self.model_connections:
+                return ""
             return self.openai_api_key.get_secret_value()
         value = os.environ.get(api_key_env)
         if value is None:
