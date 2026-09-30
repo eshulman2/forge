@@ -1207,3 +1207,442 @@ class TestCLIConfigProjectSetupJson:
         out, err = capsys.readouterr()
         assert "Error: --remove-default-repo cannot be combined with --default-repo" in err
         assert not out
+
+    @pytest.mark.asyncio
+    async def test_json_mode_prd_proposals_repo_set_and_remove(self, capsys):
+        """Test forge.prd_proposals_repo setting and removal in JSON mode."""
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from forge.cli import cmd_project_setup
+
+        jira = MagicMock()
+        jira.set_project_property = AsyncMock()
+        jira.delete_project_property = AsyncMock()
+        jira.close = AsyncMock()
+
+        # 1. Test set
+        args = SimpleNamespace(
+            project_key="AISOS",
+            repo=None,
+            add_repo=None,
+            remove_repo=None,
+            default_repo=None,
+            remove_default_repo=False,
+            prd_proposals_repo="owner/repo",
+            remove_prd_proposals_repo=False,
+            prd_proposals_path=None,
+            remove_prd_proposals_path=False,
+            skills_config=None,
+            add_skill=None,
+            remove_skills=False,
+            model_policy=None,
+            model=None,
+            model_all=None,
+            remove_model=None,
+            clear_model_policy=False,
+            clear_model_default=False,
+            add_reference=None,
+            ref_description=None,
+            remove_reference=None,
+            list_references=False,
+            json=True,
+        )
+
+        with patch("forge.integrations.jira.client.JiraClient", return_value=jira):
+            code = await cmd_project_setup(args)
+
+        assert code == 0
+        jira.set_project_property.assert_awaited_once_with(
+            "AISOS", "forge.prd_proposals_repo", "owner/repo"
+        )
+        out, err = capsys.readouterr()
+        assert not err
+        assert "[OK]" not in out
+        data = json.loads(out)
+        assert data["project"] == "AISOS"
+        assert data["mutations"]["forge.prd_proposals_repo"] == {
+            "operation": "set",
+            "value": "owner/repo",
+        }
+
+        # 2. Test remove
+        jira.delete_project_property.reset_mock()
+        args.prd_proposals_repo = None
+        args.remove_prd_proposals_repo = True
+
+        with patch("forge.integrations.jira.client.JiraClient", return_value=jira):
+            code = await cmd_project_setup(args)
+
+        assert code == 0
+        jira.delete_project_property.assert_awaited_once_with(
+            "AISOS", "forge.prd_proposals_repo"
+        )
+        out, err = capsys.readouterr()
+        assert not err
+        assert "[OK]" not in out
+        data = json.loads(out)
+        assert data["project"] == "AISOS"
+        assert data["mutations"]["forge.prd_proposals_repo"] == {
+            "operation": "remove",
+            "value": None,
+        }
+
+    @pytest.mark.asyncio
+    async def test_json_mode_prd_proposals_path_set_and_remove(self, capsys):
+        """Test forge.prd_proposals_path setting and removal in JSON mode."""
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from forge.cli import cmd_project_setup
+
+        jira = MagicMock()
+        jira.set_project_property = AsyncMock()
+        jira.delete_project_property = AsyncMock()
+        jira.close = AsyncMock()
+
+        # 1. Test set
+        args = SimpleNamespace(
+            project_key="AISOS",
+            repo=None,
+            add_repo=None,
+            remove_repo=None,
+            default_repo=None,
+            remove_default_repo=False,
+            prd_proposals_repo=None,
+            remove_prd_proposals_repo=False,
+            prd_proposals_path="enhancements/",
+            remove_prd_proposals_path=False,
+            skills_config=None,
+            add_skill=None,
+            remove_skills=False,
+            model_policy=None,
+            model=None,
+            model_all=None,
+            remove_model=None,
+            clear_model_policy=False,
+            clear_model_default=False,
+            add_reference=None,
+            ref_description=None,
+            remove_reference=None,
+            list_references=False,
+            json=True,
+        )
+
+        with patch("forge.integrations.jira.client.JiraClient", return_value=jira):
+            code = await cmd_project_setup(args)
+
+        assert code == 0
+        jira.set_project_property.assert_awaited_once_with(
+            "AISOS", "forge.prd_proposals_path", "enhancements"
+        )
+        out, err = capsys.readouterr()
+        assert not err
+        assert "[OK]" not in out
+        data = json.loads(out)
+        assert data["mutations"]["forge.prd_proposals_path"] == {
+            "operation": "set",
+            "value": "enhancements",
+        }
+
+        # 2. Test remove
+        jira.delete_project_property.reset_mock()
+        args.prd_proposals_path = None
+        args.remove_prd_proposals_path = True
+
+        with patch("forge.integrations.jira.client.JiraClient", return_value=jira):
+            code = await cmd_project_setup(args)
+
+        assert code == 0
+        jira.delete_project_property.assert_awaited_once_with(
+            "AISOS", "forge.prd_proposals_path"
+        )
+        out, err = capsys.readouterr()
+        assert not err
+        assert "[OK]" not in out
+        data = json.loads(out)
+        assert data["mutations"]["forge.prd_proposals_path"] == {
+            "operation": "remove",
+            "value": None,
+        }
+
+    @pytest.mark.asyncio
+    async def test_json_mode_skills_set_and_remove(self, capsys):
+        """Test forge.skills setting and removal in JSON mode."""
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from forge.cli import cmd_project_setup
+
+        jira = MagicMock()
+        jira.set_project_property = AsyncMock()
+        jira.delete_project_property = AsyncMock()
+        jira.close = AsyncMock()
+
+        # 1. Test set using add_skill
+        args = SimpleNamespace(
+            project_key="AISOS",
+            repo=None,
+            add_repo=None,
+            remove_repo=None,
+            default_repo=None,
+            remove_default_repo=False,
+            prd_proposals_repo=None,
+            remove_prd_proposals_repo=False,
+            prd_proposals_path=None,
+            remove_prd_proposals_path=False,
+            skills_config=None,
+            add_skill=["source=https://github.com/org/skill,path=my-skill"],
+            remove_skills=False,
+            model_policy=None,
+            model=None,
+            model_all=None,
+            remove_model=None,
+            clear_model_policy=False,
+            clear_model_default=False,
+            add_reference=None,
+            ref_description=None,
+            remove_reference=None,
+            list_references=False,
+            json=True,
+        )
+
+        with patch("forge.integrations.jira.client.JiraClient", return_value=jira):
+            code = await cmd_project_setup(args)
+
+        assert code == 0
+        expected_value = [{"source": "https://github.com/org/skill", "path": "my-skill"}]
+        jira.set_project_property.assert_awaited_once_with(
+            "AISOS", "forge.skills", expected_value
+        )
+        out, err = capsys.readouterr()
+        assert not err
+        data = json.loads(out)
+        assert data["mutations"]["forge.skills"] == {
+            "operation": "set",
+            "value": expected_value,
+        }
+
+        # 2. Test remove
+        jira.delete_project_property.reset_mock()
+        args.add_skill = None
+        args.remove_skills = True
+
+        with patch("forge.integrations.jira.client.JiraClient", return_value=jira):
+            code = await cmd_project_setup(args)
+
+        assert code == 0
+        jira.delete_project_property.assert_awaited_once_with(
+            "AISOS", "forge.skills"
+        )
+        out, err = capsys.readouterr()
+        assert not err
+        data = json.loads(out)
+        assert data["mutations"]["forge.skills"] == {
+            "operation": "remove",
+            "value": None,
+        }
+
+    @pytest.mark.asyncio
+    async def test_json_mode_model_policy_set_and_remove(self, capsys):
+        """Test forge.model_policy setting and removal in JSON mode."""
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from forge.cli import cmd_project_setup
+
+        jira = MagicMock()
+        jira.set_project_property = AsyncMock()
+        jira.delete_project_property = AsyncMock()
+        jira.close = AsyncMock()
+
+        # 1. Test set using model_policy JSON
+        args = SimpleNamespace(
+            project_key="AISOS",
+            repo=None,
+            add_repo=None,
+            remove_repo=None,
+            default_repo=None,
+            remove_default_repo=False,
+            prd_proposals_repo=None,
+            remove_prd_proposals_repo=False,
+            prd_proposals_path=None,
+            remove_prd_proposals_path=False,
+            skills_config=None,
+            add_skill=None,
+            remove_skills=False,
+            model_policy='{"generate_prd": {"connection": "anthropic", "model": "claude-3-5-sonnet"}}',
+            model=None,
+            model_all=None,
+            remove_model=None,
+            clear_model_policy=False,
+            clear_model_default=False,
+            add_reference=None,
+            ref_description=None,
+            remove_reference=None,
+            list_references=False,
+            json=True,
+        )
+
+        with patch("forge.integrations.jira.client.JiraClient", return_value=jira):
+            code = await cmd_project_setup(args)
+
+        assert code == 0
+        expected_policy = {"generate_prd": {"connection": "anthropic", "model": "claude-3-5-sonnet"}}
+        jira.set_project_property.assert_awaited_once_with(
+            "AISOS", "forge.model_policy", expected_policy
+        )
+        out, err = capsys.readouterr()
+        assert not err
+        data = json.loads(out)
+        assert data["mutations"]["forge.model_policy"] == {
+            "operation": "set",
+            "value": expected_policy,
+        }
+
+        # 2. Test remove using clear_model_policy
+        jira.delete_project_property.reset_mock()
+        args.model_policy = None
+        args.clear_model_policy = True
+
+        with patch("forge.integrations.jira.client.JiraClient", return_value=jira):
+            code = await cmd_project_setup(args)
+
+        assert code == 0
+        jira.delete_project_property.assert_awaited_once_with(
+            "AISOS", "forge.model_policy"
+        )
+        out, err = capsys.readouterr()
+        assert not err
+        data = json.loads(out)
+        assert data["mutations"]["forge.model_policy"] == {
+            "operation": "remove",
+            "value": None,
+        }
+
+    @pytest.mark.asyncio
+    async def test_json_mode_model_default_set_and_remove(self, capsys):
+        """Test forge.model_default setting and removal in JSON mode."""
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from forge.cli import cmd_project_setup
+
+        jira = MagicMock()
+        jira.set_project_property = AsyncMock()
+        jira.delete_project_property = AsyncMock()
+        jira.close = AsyncMock()
+
+        # 1. Test set using model_all
+        args = SimpleNamespace(
+            project_key="AISOS",
+            repo=None,
+            add_repo=None,
+            remove_repo=None,
+            default_repo=None,
+            remove_default_repo=False,
+            prd_proposals_repo=None,
+            remove_prd_proposals_repo=False,
+            prd_proposals_path=None,
+            remove_prd_proposals_path=False,
+            skills_config=None,
+            add_skill=None,
+            remove_skills=False,
+            model_policy=None,
+            model=None,
+            model_all="vertex-prod:gemini-pro",
+            remove_model=None,
+            clear_model_policy=False,
+            clear_model_default=False,
+            add_reference=None,
+            ref_description=None,
+            remove_reference=None,
+            list_references=False,
+            json=True,
+        )
+
+        with patch("forge.integrations.jira.client.JiraClient", return_value=jira):
+            code = await cmd_project_setup(args)
+
+        assert code == 0
+        expected_default = {"connection": "vertex-prod", "model": "gemini-pro"}
+        jira.set_project_property.assert_awaited_once_with(
+            "AISOS", "forge.model_default", expected_default
+        )
+        out, err = capsys.readouterr()
+        assert not err
+        data = json.loads(out)
+        assert data["mutations"]["forge.model_default"] == {
+            "operation": "set",
+            "value": expected_default,
+        }
+
+        # 2. Test remove using clear_model_default
+        jira.delete_project_property.reset_mock()
+        args.model_all = None
+        args.clear_model_default = True
+
+        with patch("forge.integrations.jira.client.JiraClient", return_value=jira):
+            code = await cmd_project_setup(args)
+
+        assert code == 0
+        jira.delete_project_property.assert_awaited_once_with(
+            "AISOS", "forge.model_default"
+        )
+        out, err = capsys.readouterr()
+        assert not err
+        data = json.loads(out)
+        assert data["mutations"]["forge.model_default"] == {
+            "operation": "remove",
+            "value": None,
+        }
+
+    @pytest.mark.asyncio
+    async def test_json_mode_references_set(self, capsys):
+        """Test forge.references setting in JSON mode."""
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from forge.cli import cmd_project_setup
+
+        jira = MagicMock()
+        jira.get_project_references = AsyncMock(return_value=[])
+        jira.set_project_references = AsyncMock()
+        jira.close = AsyncMock()
+
+        args = SimpleNamespace(
+            project_key="AISOS",
+            repo=None,
+            add_repo=None,
+            remove_repo=None,
+            default_repo=None,
+            remove_default_repo=False,
+            prd_proposals_repo=None,
+            remove_prd_proposals_repo=False,
+            prd_proposals_path=None,
+            remove_prd_proposals_path=False,
+            skills_config=None,
+            add_skill=None,
+            remove_skills=False,
+            model_policy=None,
+            model=None,
+            model_all=None,
+            remove_model=None,
+            clear_model_policy=False,
+            clear_model_default=False,
+            add_reference=["https://example.com/doc"],
+            ref_description=["My reference description"],
+            remove_reference=None,
+            list_references=False,
+            json=True,
+        )
+
+        with patch("forge.integrations.jira.client.JiraClient", return_value=jira):
+            code = await cmd_project_setup(args)
+
+        assert code == 0
+        expected_references = [{"url": "https://example.com/doc", "description": "My reference description"}]
+        jira.set_project_references.assert_awaited_once_with(
+            "AISOS", expected_references
+        )
+        out, err = capsys.readouterr()
+        assert not err
+        data = json.loads(out)
+        assert data["mutations"]["forge.references"] == {
+            "operation": "set",
+            "value": expected_references,
+        }
