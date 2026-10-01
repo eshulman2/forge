@@ -17,8 +17,8 @@ from typing import Any, TypeVar, cast
 
 from deepagents import create_deep_agent
 from deepagents.backends.filesystem import FilesystemBackend
-from langchain.agents.structured_output import ProviderStrategy, ToolStrategy
 from deepagents.middleware.filesystem import FilesystemPermission
+from langchain.agents.structured_output import ProviderStrategy, ToolStrategy
 from langchain_anthropic import ChatAnthropic
 from langgraph.checkpoint.memory import MemorySaver
 from pydantic import BaseModel
@@ -34,7 +34,6 @@ except ImportError:
     HAS_MCP = False
 
 from forge.config import Settings, get_settings
-from forge.integrations.agents.structured_outputs import ArtifactDocument, EpicDecomposition
 from forge.integrations.agents.security import (
     PROHIBITED_BUILTIN_TOOLS,
     SAFE_BUILTIN_TOOLS,
@@ -43,6 +42,7 @@ from forge.integrations.agents.security import (
     parse_host_tools,
     validate_agent_root,
 )
+from forge.integrations.agents.structured_outputs import ArtifactDocument, EpicDecomposition
 from forge.integrations.langfuse import get_langfuse_config, get_langfuse_context
 from forge.integrations.langfuse.fields import resolve_trace_fields
 from forge.model_policy import resolve_model_target_for_project
