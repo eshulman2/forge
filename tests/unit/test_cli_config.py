@@ -1459,3 +1459,55 @@ class TestCLIConfigProjectSetupJson:
             "operation": "set",
             "value": expected_references,
         }
+
+    @pytest.mark.asyncio
+    async def test_json_mode_list_references(self, capsys):
+        """Test listing references in JSON mode without mutation."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from forge.cli import cmd_project_setup
+
+        jira = MagicMock()
+        mock_references = [{"url": "https://example.com/doc", "description": "Existing doc"}]
+        jira.get_project_references = AsyncMock(return_value=mock_references)
+        jira.close = AsyncMock()
+
+        args = self.setup_args(
+            list_references=True,
+            json=True,
+        )
+
+        with patch("forge.integrations.jira.client.JiraClient", return_value=jira):
+            code = await cmd_project_setup(args)
+
+        assert code == 0
+        jira.get_project_references.assert_awaited_once_with("AISOS")
+        out, err = capsys.readouterr()
+        assert not err
+        data = json.loads(out)
+        assert data["references"] == mock_references
+        assert data["mutations"] == {}
+
+    @pytest.mark.asyncio
+    async def test_json_mode_close_failure(self, capsys):
+        """Test close failure in JSON mode routes error and returns 1."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from forge.cli import cmd_project_setup
+
+        jira = MagicMock()
+        jira.set_project_property = AsyncMock()
+        jira.close = AsyncMock(side_effect=Exception("Failed to close Jira client"))
+
+        args = self.setup_args(
+            default_repo="org/repo",
+            json=True,
+        )
+
+        with patch("forge.integrations.jira.client.JiraClient", return_value=jira):
+            code = await cmd_project_setup(args)
+
+        assert code == 1
+        out, err = capsys.readouterr()
+        assert not out
+        assert "Failed to close Jira client" in err

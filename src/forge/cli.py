@@ -541,6 +541,7 @@ async def cmd_project_setup(args: argparse.Namespace) -> int:
     original_stdout = sys.stdout
     exit_code = 1
     mutations = {}
+    current_references = []
 
     try:
         if is_json:
@@ -995,6 +996,9 @@ async def cmd_project_setup(args: argparse.Namespace) -> int:
                 print(msg)
             return 1
 
+        if jira is not None:
+            await jira.close()
+            jira = None
         exit_code = 0
         return 0
 
@@ -1006,9 +1010,15 @@ async def cmd_project_setup(args: argparse.Namespace) -> int:
         if is_json:
             sys.stdout = original_stdout
             if exit_code == 0:
-                print(json.dumps({"project": project_key, "mutations": mutations}, indent=2))
+                out_payload = {"project": project_key, "mutations": mutations}
+                if getattr(args, "list_references", False):
+                    out_payload["references"] = current_references
+                print(json.dumps(out_payload, indent=2))
         if jira is not None:
-            await jira.close()
+            import contextlib
+
+            with contextlib.suppress(Exception):
+                await jira.close()
 
 
 async def cmd_get_config(args: argparse.Namespace) -> int:
