@@ -71,6 +71,7 @@ async def test_implements_resolved_task_and_marks_normalized_work_complete() -> 
             AsyncMock(side_effect=lambda _state, _jira, prompt: prompt),
         ),
         patch("forge.workflow.nodes.implement_work.post_status_comment", AsyncMock()),
+        patch("forge.workflow.nodes.implement_work.ContainerRunner", MagicMock()),
         patch(
             "forge.workflow.nodes.implement_work.run_and_persist_execution",
             AsyncMock(side_effect=execute),

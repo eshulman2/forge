@@ -274,6 +274,42 @@ curl -X PUT \
   -d '"org/repo1"'
 ```
 
+### Setting up via the Forge CLI
+
+Instead of using raw `curl` requests, you can use the `forge project-setup` CLI command to configure these properties. When running in automation, use the `--json` flag to retrieve structured mutation output:
+
+```bash
+# Set default repository and output changes as pretty-printed JSON
+forge project-setup MYPROJ --default-repo org/repo1 --json
+```
+
+Output format on success:
+```json
+{
+  "project": "MYPROJ",
+  "mutations": {
+    "forge.default_repo": {
+      "operation": "set",
+      "value": "org/repo1"
+    }
+  }
+}
+```
+
+This JSON output is easily consumable with tools like `jq`:
+```bash
+# Get the mutated value of a specific property using jq
+forge project-setup MYPROJ --default-repo org/repo1 --json | jq '.mutations["forge.default_repo"].value'
+# Output: "org/repo1"
+```
+
+### Error Handling in JSON Mode
+
+When running with `--json`, if an error or exception occurs during execution:
+- Standard output (`stdout`) is completely suppressed and remains empty.
+- The error description is written directly to standard error (`stderr`).
+- The command exits with a non-zero exit code (`1`).
+
 Repository labels on managed tickets use `repo:<owner>/<repo>`. Forge validates
 that assignment against the project's configured repositories before workspace
 setup or implementation. A missing or invalid assignment blocks the workflow
